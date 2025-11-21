@@ -1,0 +1,6 @@
+# Core dependencies for OpenStack Upgrade Assistant
+google-genai>=1.0.0
+mcp>=0.1.0
+prompt-toolkit>=3.0.0
+rich>=13.0.0
+python-dotenv>=1.0.0

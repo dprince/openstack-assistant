@@ -1,0 +1,28 @@
+[project]
+name = "openstack-assistant"
+version = "0.1.0"
+description = "A simplified command-line chat assistant for OpenStack using Gemini and MCP servers"
+requires-python = ">=3.9"
+dependencies = [
+    "google-genai>=1.0.0",
+    "mcp>=0.1.0",
+    "prompt-toolkit>=3.0.0",
+    "rich>=13.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+openstack-assistant = "openstack_assistant.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["openstack_assistant*"]
