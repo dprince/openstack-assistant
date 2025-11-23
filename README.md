@@ -1,10 +1,11 @@
 # OpenStack Assistant
 
-A simplified command-line chat assistant for OpenStack, powered by Google Gemini AI and Model Context Protocol (MCP) servers.
+A simplified command-line chat assistant for OpenStack, powered by AI (Google Gemini or IBM Granite) and Model Context Protocol (MCP) servers.
 
 ## Features
 
-- **Interactive Chat Interface**: Chat with Google Gemini AI about OpenStack
+- **Interactive Chat Interface**: Chat with AI (IBM Granite or Google Gemini) about OpenStack
+- **Multiple LLM Providers**: Support for Google Gemini and IBM Granite models
 - **MCP Server Integration**: Connect to MCP servers to execute tools and access external data
 - **Workflow Automation**: Define and execute multi-step workflows combining AI queries and tool calls
 - **Simple Configuration**: Easy setup with environment variables
@@ -14,7 +15,9 @@ A simplified command-line chat assistant for OpenStack, powered by Google Gemini
 ### Prerequisites
 
 - Python 3.9 or higher
-- A Google Gemini API key (get one at https://makersuite.google.com/app/apikey)
+- One of the following AI providers:
+  - A Google Gemini API key (get one at https://makersuite.google.com/app/apikey)
+  - An IBM Granite API endpoint URL and user key
 - Optional: Node.js (for MCP servers like filesystem, etc.)
 
 ### Install from source
@@ -29,11 +32,28 @@ pip install -e .
 Create a `.env` file in your working directory or set environment variables:
 
 ```bash
-# Required: Gemini API key
+# ============================================================================
+# LLM Provider Configuration (Choose ONE)
+# ============================================================================
+
+# Option 1: Google Gemini
 GEMINI_API_KEY=your-api-key-here
 
 # Optional: Gemini model (default: gemini-2.5-flash)
+# Options: gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash, gemini-2.0-flash-lite
 GEMINI_MODEL=gemini-2.5-flash
+
+# Option 2: IBM Granite
+# Requires both URL and User Key
+GRANITE_URL=https://your-granite-api-endpoint.com
+GRANITE_USER_KEY=your-granite-user-key-here
+
+# Optional: Granite temperature (default: 0.0)
+GRANITE_TEMPERATURE=0.1
+
+# ============================================================================
+# MCP and Workflow Configuration
+# ============================================================================
 
 # Optional: MCP server command
 MCP_SERVER_COMMAND="npx @modelcontextprotocol/server-filesystem /tmp"
@@ -101,6 +121,8 @@ See `examples/openstack-upgrade-workflow.json` for an example workflow definitio
 usage: openstack-assistant [-h] [--version] [-v] [-q] [-i] [-m MESSAGE]
                           [--mcp-server MCP_SERVER] [-w WORKFLOW]
                           [--api-key API_KEY] [--model MODEL]
+                          [--granite-url GRANITE_URL]
+                          [--granite-user-key GRANITE_USER_KEY]
 
 OpenStack Assistant - AI-powered chat interface for OpenStack
 
@@ -120,7 +142,13 @@ options:
                         Path to workflow JSON file to execute
   --api-key API_KEY     Gemini API key (overrides GEMINI_API_KEY environment
                         variable)
-  --model MODEL         Gemini model to use (default: gemini-1.5-flash)
+  --model MODEL         Gemini model to use (default: gemini-2.5-flash)
+  --granite-url GRANITE_URL
+                        Granite API URL (overrides GRANITE_URL environment
+                        variable)
+  --granite-user-key GRANITE_USER_KEY
+                        Granite user key (overrides GRANITE_USER_KEY
+                        environment variable)
 ```
 
 ## Workflow Files
@@ -255,7 +283,7 @@ The assistant can connect to any MCP server that follows the Model Context Proto
 
 ## Examples
 
-### Example 1: Basic Chat
+### Example 1: Basic Chat with Gemini
 
 ```bash
 export GEMINI_API_KEY=your-key-here
@@ -266,6 +294,21 @@ Then ask questions like:
 - "What are the prerequisites for upgrading from Wallaby to Xena?"
 - "How do I backup my OpenStack database before upgrading?"
 - "What's the recommended order for upgrading OpenStack services?"
+
+### Example 1b: Basic Chat with Granite
+
+```bash
+export GRANITE_URL=https://your-granite-api-endpoint.com
+export GRANITE_USER_KEY=your-granite-user-key-here
+openstack-assistant
+```
+
+Or using command-line options:
+
+```bash
+openstack-assistant --granite-url https://your-granite-api-endpoint.com \
+                   --granite-user-key your-granite-user-key-here
+```
 
 ### Example 2: With Filesystem Access
 
@@ -340,10 +383,25 @@ This is a simplified version of the RHEL command-line-assistant project:
 
 ### API Key Issues
 
+**For Gemini:**
 If you get authentication errors:
 1. Verify your API key is correct
 2. Check that the environment variable is set: `echo $GEMINI_API_KEY`
 3. Try setting it directly: `openstack-assistant --api-key your-key-here`
+
+**For Granite:**
+If you get authentication errors:
+1. Verify your Granite URL and user key are correct
+2. Check that the environment variables are set:
+   ```bash
+   echo $GRANITE_URL
+   echo $GRANITE_USER_KEY
+   ```
+3. Try setting them directly:
+   ```bash
+   openstack-assistant --granite-url https://your-endpoint.com \
+                      --granite-user-key your-key-here
+   ```
 
 ### MCP Connection Issues
 
@@ -355,10 +413,16 @@ If MCP server connection fails:
 
 ### Rate Limiting
 
+**For Gemini:**
 If you hit Gemini API rate limits:
 - Wait a few minutes before retrying
 - Consider using a different model with `--model`
 - Check your API quota at Google AI Studio
+
+**For Granite:**
+If you encounter rate limits or quota issues:
+- Wait a few minutes before retrying
+- Contact your Granite API administrator for quota adjustments
 
 ## License
 
