@@ -168,6 +168,13 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Model to use (overrides GEMINI_MODEL or GRANITE_MODEL)",
     )
 
+    # Namespace argument
+    parser.add_argument(
+        "--namespace",
+        type=str,
+        help="Default Kubernetes namespace to use (overrides NAMESPACE environment variable)",
+    )
+
     return parser
 
 
@@ -356,6 +363,8 @@ def main() -> int:
                 config.gemini_model = args.model
             elif args.provider == "granite":
                 logger.warning("--model argument is ignored for Granite. Specify full URL in --granite-url or GRANITE_URL")
+        if args.namespace:
+            config.namespace = args.namespace
 
         # Determine MCP command
         mcp_command = args.mcp_server or config.mcp_server_command

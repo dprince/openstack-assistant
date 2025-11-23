@@ -19,4 +19,8 @@ fi
 
 # Launch the Python application
 echo "Starting openstack-assistant..."
-exec openstack-assistant "$@"
+if [ -n "$NAMESPACE" ]; then
+    exec openstack-assistant --namespace "$NAMESPACE" "$@"
+else
+    exec openstack-assistant "$@"
+fi

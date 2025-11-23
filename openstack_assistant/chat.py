@@ -175,6 +175,12 @@ Type your questions and press Enter to chat with the assistant.
                 logger.warning(f"System instruction file is empty: {instruction_path}")
                 return None
 
+            # Inject namespace defaults if namespace is configured
+            if self.config.namespace:
+                namespace_defaults = f"## Defaults\nDefault to use the '{self.config.namespace}' k8s namespace unless otherwise instructed when using any MCP tools."
+                instruction = f"{namespace_defaults}\n\n{instruction}"
+                logger.info(f"Injected namespace defaults for: {self.config.namespace}")
+
             logger.info(f"Loaded system instruction from: {instruction_path}")
             return instruction
 

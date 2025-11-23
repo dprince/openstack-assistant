@@ -22,6 +22,7 @@ class Config:
         mcp_server_command: Command to start the MCP server
         workflow_file: Path to workflow definition file
         system_instruction_file: Path to system instruction file for chat mode
+        namespace: Default Kubernetes namespace to use
     """
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.5-flash"
@@ -32,6 +33,7 @@ class Config:
     mcp_server_command: Optional[str] = None
     workflow_file: Optional[Path] = None
     system_instruction_file: Optional[Path] = None
+    namespace: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -86,6 +88,9 @@ class Config:
             if default_path.exists():
                 system_instruction_file = default_path
 
+        # Load namespace
+        namespace = os.getenv("NAMESPACE")
+
         return cls(
             gemini_api_key=gemini_api_key,
             gemini_model=gemini_model,
@@ -96,4 +101,5 @@ class Config:
             mcp_server_command=mcp_command,
             workflow_file=workflow_file,
             system_instruction_file=system_instruction_file,
+            namespace=namespace,
         )
