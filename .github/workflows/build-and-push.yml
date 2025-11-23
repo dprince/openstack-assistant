@@ -1,18 +1,16 @@
-name: Build and Push Docker Image
+name: Build and Push to Quay.io
 
 on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
   pull_request:
     branches:
       - main
 
 env:
   REGISTRY: quay.io
-  IMAGE_NAME: ${{ secrets.QUAY_USERNAME }}/openstack-assistant
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -44,9 +42,6 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
@@ -54,8 +49,10 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          platforms: linux/amd64

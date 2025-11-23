@@ -1,8 +1,14 @@
+# Copy openstack-k8s-mcp binary from source image
+FROM quay.io/dprince/openstack-k8s-mcp:main AS mcp-binary
+
 # Use Python 3.11 slim image as base
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
+
+# Copy the openstack-k8s-mcp binary from the mcp-binary stage
+COPY --from=mcp-binary /openstack-k8s-mcp /usr/local/bin/openstack-k8s-mcp
 
 # Install system dependencies if needed
 RUN apt-get update && \

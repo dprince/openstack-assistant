@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Export MCP server command location
+export MCP_SERVER_COMMAND=/usr/local/bin/openstack-k8s-mcp
+
 # Check for Kubernetes service account token and set KUBECONFIG if it exists
 if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
     echo "Kubernetes service account token found, setting KUBECONFIG"
