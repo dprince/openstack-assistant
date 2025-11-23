@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import sys
-from typing import Optional
+from typing import Optional, Union
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
@@ -14,6 +14,7 @@ from rich.panel import Panel
 
 from .config import Config
 from .gemini_client import GeminiClient
+from .granite_client import GraniteClient
 from .mcp_client import MCPClient
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ class ChatInterface:
     Provides a REPL-style chat interface for interacting with the assistant.
 
     Attributes:
-        gemini_client: Gemini client for AI interactions
+        llm_client: LLM client (Gemini or Granite) for AI interactions
         mcp_client: Optional MCP client for tool access
         config: Configuration object
         console: Rich console for formatted output
@@ -34,18 +35,18 @@ class ChatInterface:
 
     def __init__(
         self,
-        gemini_client: GeminiClient,
+        llm_client: Union[GeminiClient, GraniteClient],
         config: Config,
         mcp_client: Optional[MCPClient] = None,
     ):
         """Initialize the chat interface.
 
         Args:
-            gemini_client: Gemini client for AI interactions
+            llm_client: LLM client (Gemini or Granite) for AI interactions
             config: Configuration object
             mcp_client: Optional MCP client for tool access
         """
-        self.gemini_client = gemini_client
+        self.llm_client = llm_client
         self.config = config
         self.mcp_client = mcp_client
         self.console = Console()
@@ -66,8 +67,8 @@ class ChatInterface:
         if self.mcp_client:
             mcp_tools = self.mcp_client.get_available_tools()
 
-        # Start Gemini chat session with system instruction and MCP tools
-        self.gemini_client.start_chat(
+        # Start LLM chat session with system instruction and MCP tools
+        self.llm_client.start_chat(
             system_instruction=system_instruction,
             tools=mcp_tools,
             mcp_client=self.mcp_client
@@ -121,20 +122,20 @@ Type your questions and press Enter to chat with the assistant.
     def _display_initial_greeting(self) -> None:
         """Display initial AI greeting.
 
-        Triggers the AI to provide an initial greeting as specified in the system instruction.
+        Triggers the AI to auto-execute step 1 as specified in the system instruction.
         """
         try:
             with self.console.status("[cyan]Starting assistant...[/cyan]", spinner="dots"):
-                response = self.gemini_client.send_message("Please introduce yourself and greet the user.")
+                response = self.llm_client.send_message("Begin the upgrade process.")
 
             self.console.print("[green]Assistant:[/green]")
             self.console.print(Panel(Markdown(response), border_style="blue"))
             self.console.print()
 
         except Exception as e:
-            logger.error(f"Error getting initial greeting: {e}")
-            # Don't fail the whole chat if greeting fails, just log and continue
-            logger.warning("Continuing chat session without initial greeting")
+            logger.error(f"Error getting initial response: {e}")
+            # Don't fail the whole chat if initial response fails, just log and continue
+            logger.warning("Continuing chat session without initial response")
 
     def _display_mcp_tools(self) -> None:
         """Display available MCP tools."""
@@ -238,7 +239,7 @@ Type your questions and press Enter to chat with the assistant.
             # Always show thinking indicator
             # MCP tool notifications will still display via console.print()
             with self.console.status("[cyan]Thinking...[/cyan]", spinner="dots"):
-                response = self.gemini_client.send_message(message)
+                response = self.llm_client.send_message(message)
 
             # Display response
             self.console.print("\n[green]Assistant:[/green]")
@@ -247,11 +248,11 @@ Type your questions and press Enter to chat with the assistant.
 
         except Exception as e:
             logger.error(f"Error handling message: {e}")
-            self.console.print(f"[red]Error: Failed to get response from Gemini. {e}[/red]")
+            self.console.print(f"[red]Error: Failed to get response from LLM. {e}[/red]")
 
     def _clear_history(self) -> None:
         """Clear the conversation history."""
-        self.gemini_client.clear_history()
+        self.llm_client.clear_history()
         self.console.print("[yellow]Conversation history cleared.[/yellow]")
 
     def send_single_message(self, message: str) -> None:
@@ -262,7 +263,11 @@ Type your questions and press Enter to chat with the assistant.
         """
         try:
             # Start chat if not already started
-            if not self.gemini_client.chat_session:
+            # Check for both GeminiClient and GraniteClient session attributes
+            has_session = (hasattr(self.llm_client, 'chat_session') and self.llm_client.chat_session) or \
+                         (hasattr(self.llm_client, 'messages') and self.llm_client.messages)
+
+            if not has_session:
                 system_instruction = self._load_system_instruction()
 
                 # Get MCP tools if connected
@@ -270,7 +275,7 @@ Type your questions and press Enter to chat with the assistant.
                 if self.mcp_client:
                     mcp_tools = self.mcp_client.get_available_tools()
 
-                self.gemini_client.start_chat(
+                self.llm_client.start_chat(
                     system_instruction=system_instruction,
                     tools=mcp_tools,
                     mcp_client=self.mcp_client
@@ -283,7 +288,7 @@ Type your questions and press Enter to chat with the assistant.
             # Always show thinking indicator
             # MCP tool notifications will still display via console.print()
             with self.console.status("[cyan]Thinking...[/cyan]", spinner="dots"):
-                response = self.gemini_client.send_message(message)
+                response = self.llm_client.send_message(message)
 
             # Display response
             self.console.print(Panel(Markdown(response), title="Response", border_style="blue"))

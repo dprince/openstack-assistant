@@ -15,13 +15,19 @@ class Config:
     Attributes:
         gemini_api_key: API key for Google Gemini
         gemini_model: Gemini model to use (default: gemini-2.5-flash)
+        granite_url: Full URL for Granite API (including model routing if needed)
+        granite_user_key: User key for Granite authentication
+        granite_temperature: Temperature for Granite model (default: 0.0)
         mcp_server_url: URL of the MCP server
         mcp_server_command: Command to start the MCP server
         workflow_file: Path to workflow definition file
         system_instruction_file: Path to system instruction file for chat mode
     """
-    gemini_api_key: str
+    gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.5-flash"
+    granite_url: Optional[str] = None
+    granite_user_key: Optional[str] = None
+    granite_temperature: float = 0.0
     mcp_server_url: Optional[str] = None
     mcp_server_command: Optional[str] = None
     workflow_file: Optional[Path] = None
@@ -38,19 +44,30 @@ class Config:
             Config: Configured instance
 
         Raises:
-            ValueError: If GEMINI_API_KEY is not set
+            ValueError: If neither GEMINI_API_KEY nor GRANITE_URL/GRANITE_USER_KEY are set
         """
         # Load .env file if it exists
         load_dotenv()
 
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
+        # Load Gemini configuration
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+        # Load Granite configuration
+        granite_url = os.getenv("GRANITE_URL")
+        granite_user_key = os.getenv("GRANITE_USER_KEY")
+        granite_temperature = float(os.getenv("GRANITE_TEMPERATURE", "0.0"))
+
+        # Validate that at least one LLM provider is configured
+        if not gemini_api_key and not (granite_url and granite_user_key):
             raise ValueError(
-                "GEMINI_API_KEY environment variable is required. "
-                "Set it in your environment or create a .env file."
+                "At least one LLM provider must be configured:\n"
+                "  - For Gemini: Set GEMINI_API_KEY\n"
+                "  - For Granite: Set GRANITE_URL and GRANITE_USER_KEY\n"
+                "Set them in your environment or create a .env file."
             )
 
-        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        # Load common configuration
         mcp_url = os.getenv("MCP_SERVER_URL")
         mcp_command = os.getenv("MCP_SERVER_COMMAND")
 
@@ -70,8 +87,11 @@ class Config:
                 system_instruction_file = default_path
 
         return cls(
-            gemini_api_key=api_key,
-            gemini_model=model,
+            gemini_api_key=gemini_api_key,
+            gemini_model=gemini_model,
+            granite_url=granite_url,
+            granite_user_key=granite_user_key,
+            granite_temperature=granite_temperature,
             mcp_server_url=mcp_url,
             mcp_server_command=mcp_command,
             workflow_file=workflow_file,
