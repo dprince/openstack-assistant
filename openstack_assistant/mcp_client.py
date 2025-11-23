@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,18 +19,23 @@ class MCPClient:
         server_command: Command to start the MCP server
         process: Subprocess running the MCP server
         tools: Available tools from the MCP server
+        _notification_handler: Optional callback for handling server notifications
     """
 
-    def __init__(self, server_command: Optional[str] = None):
+    def __init__(self, server_command: Optional[str] = None,
+                 notification_handler: Optional[Callable[[Dict[str, Any]], None]] = None):
         """Initialize the MCP client.
 
         Args:
             server_command: Command to start the MCP server (e.g., "npx @modelcontextprotocol/server-filesystem")
+            notification_handler: Optional callback function for handling notifications from the server.
+                                 The function receives a notification dict as its argument.
         """
         self.server_command = server_command
         self.process: Optional[subprocess.Popen] = None
         self.tools: List[Dict[str, Any]] = []
         self._message_id = 0
+        self._notification_handler = notification_handler
         logger.info(f"Initialized MCP client with command: {server_command}")
 
     async def connect(self) -> None:
@@ -140,7 +145,11 @@ class MCPClient:
             raise
 
     async def _send_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Send a JSON-RPC request to the MCP server.
+        """Send a JSON-RPC request to the MCP server and handle notifications.
+
+        This method sends a request and then loops reading messages from the server.
+        Notifications (messages without an 'id' field) are handled via _handle_notification,
+        and the loop continues until the response with matching ID is received.
 
         Args:
             request: The JSON-RPC request
@@ -161,14 +170,26 @@ class MCPClient:
             self.process.stdin.flush()
             logger.debug(f"Sent request: {request}")
 
-            # Read response
-            response_line = self.process.stdout.readline()
-            if not response_line:
-                raise RuntimeError("No response from MCP server")
+            # Loop reading messages until we get the response
+            request_id = request.get("id")
+            while True:
+                response_line = self.process.stdout.readline()
+                if not response_line:
+                    raise RuntimeError("No response from MCP server")
 
-            response = json.loads(response_line)
-            logger.debug(f"Received response: {response}")
-            return response
+                message = json.loads(response_line)
+                logger.debug(f"Received message: {message}")
+
+                # Check if it's a notification (no "id" field) or response (has "id")
+                if "id" not in message:
+                    # It's a notification - handle it and continue waiting
+                    self._handle_notification(message)
+                elif message.get("id") == request_id:
+                    # It's the response we're waiting for
+                    return message
+                else:
+                    # It's a response for a different request (shouldn't happen in our case)
+                    logger.warning(f"Received unexpected response with id {message.get('id')}, expected {request_id}")
 
         except Exception as e:
             logger.error(f"Error communicating with MCP server: {e}")
@@ -182,6 +203,28 @@ class MCPClient:
         """
         self._message_id += 1
         return self._message_id
+
+    def _handle_notification(self, notification: Dict[str, Any]) -> None:
+        """Handle a notification from the MCP server.
+
+        Args:
+            notification: The notification message from the server
+        """
+        method = notification.get("method", "")
+        params = notification.get("params", {})
+
+        # If user provided a custom notification handler, use it
+        if self._notification_handler:
+            self._notification_handler(notification)
+        else:
+            # Default behavior: print to console for CLI visibility
+            if method == "notifications/message":
+                level = params.get("level", "info")
+                message = params.get("message", "")
+                # Print to console so it appears in the CLI
+                print(f"[{level.upper()}] {message}")
+            else:
+                logger.info(f"Notification {method}: {params}")
 
     def get_available_tools(self) -> List[Dict[str, Any]]:
         """Get the list of available tools.

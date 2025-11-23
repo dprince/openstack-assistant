@@ -235,9 +235,9 @@ Type your questions and press Enter to chat with the assistant.
             message: The user's message
         """
         try:
-            # Show thinking indicator
+            # Always show thinking indicator
+            # MCP tool notifications will still display via console.print()
             with self.console.status("[cyan]Thinking...[/cyan]", spinner="dots"):
-                # Send message and get response
                 response = self.gemini_client.send_message(message)
 
             # Display response
@@ -280,7 +280,8 @@ Type your questions and press Enter to chat with the assistant.
                 if mcp_tools:
                     self.console.print("[cyan]MCP tools are now available to the LLM for autonomous use[/cyan]\n")
 
-            # Show thinking indicator
+            # Always show thinking indicator
+            # MCP tool notifications will still display via console.print()
             with self.console.status("[cyan]Thinking...[/cyan]", spinner="dots"):
                 response = self.gemini_client.send_message(message)
 

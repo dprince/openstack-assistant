@@ -135,7 +135,25 @@ async def run_workflow_mode(
         mcp_client = None
         if mcp_command:
             console.print(f"[cyan]Connecting to MCP server...[/cyan]")
-            mcp_client = MCPClient(mcp_command)
+
+            # Create notification handler that uses Rich console
+            def notification_handler(notification):
+                method = notification.get("method", "")
+                params = notification.get("params", {})
+                if method == "notifications/message":
+                    level = params.get("level", "info")
+                    message = params.get("message", "")
+                    # Use Rich console for formatted output
+                    level_colors = {
+                        "debug": "dim",
+                        "info": "cyan",
+                        "warning": "yellow",
+                        "error": "red"
+                    }
+                    color = level_colors.get(level.lower(), "white")
+                    console.print(f"[{color}][MCP {level.upper()}] {message}[/{color}]")
+
+            mcp_client = MCPClient(mcp_command, notification_handler=notification_handler)
             await mcp_client.connect()
             console.print(f"[green]Connected to MCP server[/green]\n")
 
@@ -191,7 +209,25 @@ async def run_chat_mode(
         if mcp_command:
             console = Console()
             console.print("[cyan]Connecting to MCP server...[/cyan]")
-            mcp_client = MCPClient(mcp_command)
+
+            # Create notification handler that uses Rich console
+            def notification_handler(notification):
+                method = notification.get("method", "")
+                params = notification.get("params", {})
+                if method == "notifications/message":
+                    level = params.get("level", "info")
+                    message = params.get("message", "")
+                    # Use Rich console for formatted output
+                    level_colors = {
+                        "debug": "dim",
+                        "info": "cyan",
+                        "warning": "yellow",
+                        "error": "red"
+                    }
+                    color = level_colors.get(level.lower(), "white")
+                    console.print(f"[{color}][MCP {level.upper()}] {message}[/{color}]")
+
+            mcp_client = MCPClient(mcp_command, notification_handler=notification_handler)
             await mcp_client.connect()
             console.print("[green]Connected to MCP server[/green]\n")
 

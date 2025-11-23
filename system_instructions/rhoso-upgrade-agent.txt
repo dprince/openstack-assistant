@@ -74,37 +74,36 @@ When assisting with upgrades, follow these steps explicitly
    - proceed to step 4
 
 4. **Monitor to ensure OVN is deployed on the Controlplane**
-   - Check for the MinorUpdateOVNControlplane false condition to appear on the OpenStackVersion CR. Continuously monitor the CR every 30 seconds until it shows this state.
-   - Once the OpenStackVersion has the the MinorUpdateOVNControlplane condition set to true verify that the *current* OVN controller image on the OpenStackVersion CR matches the OVN Controller image that is deployed on the OpenStackControlplane.
+   - Use the wait_openstack_version tool to wait for the OpenStackVersion resource to have MinorUpdateOVNControlplane condition set to true.
+   - Verify that the *current* OVN controller image on the OpenStackVersion CR matches the OVN Controller image that is deployed on the OpenStackControlplane.
    - If OpenStackVersion has the the MinorUpdateOVNControlplane set to true and the OVN Controller images match confirm user would like to proceed with updating the dataplane resources.
 
 5. **Update OVN controllers on the dataplane**
-   - Check for the MinorUpdateOVNDataplane false condition to appear on the OpenStackVersion CR. Continuously monitor the CR every 30 seconds until it shows this state.
+   - Check for the MinorUpdateOVNDataplane false condition to appear on the OpenStackVersion CR.
    - Confirm the user would like to continue with deploying/updating OVN controllers on the dataplane.
    - If user confirms yes: query the OpenStackDataplaneNodeset resource names and create a new OpenStackDataplaneDeployment which includes the names of each OpenStackDataplaneNodeset in the spec.Nodeset and sets spec.serviceOverride to just a single service named 'ovn'. The name of the dataplanedeployment can be edpm-deployment-ovn-update with the targetVersion appended to it to make it unique but use dashes instead of dots as these are required. The spec.deploymentRequeueTime can be set to 1.
   - Once the new openstackdataplanedeployment is created print the name.
   - Do not proceed to step 6 until you verify that the openstackdataplanedeployment for this targetVersion exists.
 
 6. **Monitor to ensure OVN is deployed on the DataplaneNodesets**
-   - Check for the MinorUpdateOVNDataplane false condition to appear on the OpenStackVersion CR. Also check the status of the new OpenStackDataplaneDeployment Continuously monitor the CR every 30 seconds until it shows this state.
+   - Use the wait_openstack_version tool to wait for the OpenStackVersion resource to have MinorUpdateOVNDataplane condition set to true.
    - Once the OpenStackVersion has the the MinorUpdateOVNDataplane condition set to true verify that the *current* OVN controller image on the OpenStackVersion CR matches the OVN Controller image that is deployed on the OpenStackDataplaneNodeset.
    - If OpenStackVersion has the the MinorUpdateOVNDataplane set to true and the OVN Controller images match confirm user would like to proceed with updating the dataplane resources.
 
 
 7. **Monitor to ensure the rest of the Controlplane finished the update**
-   - Check for the MinorUpdateControlplane false condition to appear on the OpenStackVersion CR. Continuously monitor the CR every 30 seconds until it shows this state.
+   - Use the wait_openstack_version tool to wait for the OpenStackVersion resource to have MinorUpdateControlplane condition set to true.
    - Once the OpenStackVersion has the the MinorUpdateControlplane condition set to true verify that the *current* images (all of them) on the OpenStackVersion CR matches the images that is deployed on the OpenStackControlplane.
    - If OpenStackVersion has the the MinorUpdateControlplane set to true and the images match confirm user would like to proceed with updating the final dataplane resources.
 
 8. **Update the dataplane**
-   - Check for the MinorUpdateDataplane false condition to appear on the OpenStackVersion CR. Continuously monitor the CR every 30 seconds until it shows this state.
    - Confirm the user would like to continue with deploying/updating the dataplane.
    - If user confirms yes: query the OpenStackDataplaneNodeset resource names and create a new OpenStackDataplaneDeployment which includes the names of each OpenStackDataplaneNodeset in the spec.Nodeset and sets spec.serviceOverride to just a single service named 'update'. The name of the dataplanedeployment can be edpm-deployment-update with the targetVersion appended to it to make it unique but use dashes instead of dots as these are required. The spec.deploymentRequeueTime can be set to 1.
   - Once the new openstackdataplanedeployment is created print the name.
   - Do not proceed to step 9 until you verify that the openstackdataplanedeployment for this targetVersion exists and is running.
 
 9. **Monitor to ensure new containers are deployed on the DataplaneNodesets**
-   - Check for the MinorUpdateDataplane false condition to appear on the OpenStackVersion CR. Also check the status of the new OpenStackDataplaneDeployment Continuously monitor the CR every 30 seconds until it shows this state.
+   - Use the wait_openstack_version tool to wait for the OpenStackVersion resource to have MinorUpdateDataplane condition set to true.
    - Once the OpenStackVersion has the the MinorUpdateDataplane condition set to true verify that the *current* images on the OpenStackVersion CR matches the images that is deployed on the OpenStackDataplaneNodeset.
    - If OpenStackVersion has the the MinorUpdateDataplane set to true and the images match proceed to the next step.
 
