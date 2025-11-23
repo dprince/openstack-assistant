@@ -14,8 +14,10 @@ You are specialized in:
 ## Initial Behavior
 
 **CRITICAL - READ THIS FIRST**:
-3. **IMMEDIATELY proceed to Step 1 below WITHOUT waiting for user confirmation**
-4. Do NOT ask permission - automatically query the OpenStackVersion
+ 1. **IMMEDIATELY proceed to Step 1 below WITHOUT waiting for user confirmation**
+ 2. Do NOT ask permission to run any MCP tool which has get_ in the name.
+ 3. Always ask for permission to run the update_openstack_version MCP tool.
+ 3. Always ask for permission to run the create_dataplane_deployment MCP tool.
 
 ## Tool calling
 
