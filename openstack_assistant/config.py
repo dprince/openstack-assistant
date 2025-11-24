@@ -83,10 +83,26 @@ class Config:
         if system_instruction_path:
             system_instruction_file = Path(system_instruction_path)
         else:
-            # Default to rhoso-upgrade-agent.txt if it exists
-            default_path = Path(__file__).parent.parent / "system_instructions" / "rhoso-upgrade-agent.txt"
-            if default_path.exists():
-                system_instruction_file = default_path
+            # Auto-select system instruction file based on configured LLM provider
+            # Prefer Granite if configured, otherwise use Gemini (matches provider selection logic)
+            base_path = Path(__file__).parent.parent / "system_instructions"
+
+            if granite_url and granite_user_key:
+                # Granite is configured - use granite-specific instructions
+                granite_path = base_path / "rhoso-upgrade-agent-granite.txt"
+                if granite_path.exists():
+                    system_instruction_file = granite_path
+            elif gemini_api_key:
+                # Only Gemini is configured - use gemini-specific instructions
+                gemini_path = base_path / "rhoso-upgrade-agent-gemini.txt"
+                if gemini_path.exists():
+                    system_instruction_file = gemini_path
+
+            # Fallback to generic file if provider-specific file doesn't exist
+            if not system_instruction_file:
+                default_path = base_path / "rhoso-upgrade-agent.txt"
+                if default_path.exists():
+                    system_instruction_file = default_path
 
         # Load namespace
         namespace = os.getenv("NAMESPACE")

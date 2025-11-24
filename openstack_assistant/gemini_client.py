@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import sys
 from typing import Any, Dict, Iterator, List, Optional
 
 from google import genai
@@ -157,9 +158,58 @@ class GeminiClient:
                     logger.error("Function call requested but no MCP client available")
                     break
 
+                # Ask user for confirmation before executing the tool
+                logger.info(f"LLM wants to execute MCP tool: {function_call.name}")
+                logger.debug(f"Tool arguments: {dict(function_call.args)}")
+
+                # Format the tool call for user review
+                print(f"\n[Tool Call Request]")
+                print(f"Tool: {function_call.name}")
+                print(f"Arguments: {dict(function_call.args)}")
+
+                # Prompt user for confirmation
+                user_approved = False
+                while True:
+                    try:
+                        user_response = input("\nProceed with this tool call? [y/n]: ").strip().lower()
+                        if user_response in ['y', 'yes']:
+                            user_approved = True
+                            break
+                        elif user_response in ['n', 'no']:
+                            # User rejected the tool call - send error back to model
+                            logger.info("User rejected tool call")
+                            error_response = types.Part(
+                                function_response=types.FunctionResponse(
+                                    name=function_call.name,
+                                    response={"error": "User rejected tool execution"}
+                                )
+                            )
+                            response = self.chat_session.send_message(error_response)
+                            iteration += 1
+                            # Break out of confirmation loop and continue with outer while loop
+                            break
+                        else:
+                            print("Please enter 'y' or 'n'")
+                            continue
+                    except (EOFError, KeyboardInterrupt):
+                        logger.info("User interrupted tool call confirmation")
+                        print("\nTool call cancelled")
+                        error_response = types.Part(
+                            function_response=types.FunctionResponse(
+                                name=function_call.name,
+                                response={"error": "User cancelled tool execution"}
+                            )
+                        )
+                        response = self.chat_session.send_message(error_response)
+                        iteration += 1
+                        break
+
+                # If user rejected, continue to next iteration
+                if not user_approved:
+                    continue
+
                 try:
                     logger.info(f"Executing MCP tool: {function_call.name}")
-                    logger.debug(f"Tool arguments: {dict(function_call.args)}")
 
                     # Execute the tool via MCP
                     # We need to handle the case where we're already in an event loop

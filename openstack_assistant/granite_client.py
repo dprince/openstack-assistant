@@ -261,9 +261,53 @@ class GraniteClient:
                         logger.warning(f"Unexpected function arguments type: {type(function_args)}")
                         function_args = {}
 
+                    # Ask user for confirmation before executing the tool
+                    logger.info(f"LLM wants to execute MCP tool: {function_name}")
+                    logger.debug(f"Tool arguments: {function_args}")
+
+                    # Format the tool call for user review
+                    print(f"\n[Tool Call Request]")
+                    print(f"Tool: {function_name}")
+                    print(f"Arguments: {function_args}")
+
+                    # Prompt user for confirmation
+                    user_approved = False
+                    while True:
+                        try:
+                            user_response = input("\nProceed with this tool call? [y/n]: ").strip().lower()
+                            if user_response in ['y', 'yes']:
+                                user_approved = True
+                                break
+                            elif user_response in ['n', 'no']:
+                                # User rejected the tool call - add error to messages
+                                logger.info("User rejected tool call")
+                                self.messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.get("id"),
+                                    "name": function_name,
+                                    "content": "Error: User rejected tool execution"
+                                })
+                                break
+                            else:
+                                print("Please enter 'y' or 'n'")
+                                continue
+                        except (EOFError, KeyboardInterrupt):
+                            logger.info("User interrupted tool call confirmation")
+                            print("\nTool call cancelled")
+                            self.messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.get("id"),
+                                "name": function_name,
+                                "content": "Error: User cancelled tool execution"
+                            })
+                            break
+
+                    # If user rejected, skip to next tool call
+                    if not user_approved:
+                        continue
+
                     try:
                         logger.info(f"Executing MCP tool: {function_name}")
-                        logger.debug(f"Tool arguments: {function_args}")
 
                         # Execute the tool via MCP
                         def run_async_in_thread(coro):
