@@ -208,30 +208,44 @@ class GeminiClient:
                 # Combine all text parts
                 text_content = ''.join(text_parts).strip()
 
-                # Check for text-based tool calls if no structured function call
+                # Check for text-based tool calls in the content (if no structured function call)
                 text_tool_calls = None
                 if not function_call and text_content:
                     text_tool_calls = self._parse_text_tool_calls(text_content)
-                    if text_tool_calls:
-                        # Remove the <tool_call> tags from the content for cleaner display
-                        clean_content = re.sub(r'<tool_call>.*?</tool_call>', '', text_content, flags=re.DOTALL).strip()
-                        logger.debug(f"Cleaned content after tool call extraction: {clean_content}")
-                        # Print the cleaned content before processing tool calls
-                        if clean_content:
-                            console.print("\n[green]Assistant:[/green]")
-                            console.print(Panel(Markdown(clean_content), border_style="blue"))
-                            console.print()
 
-                # If there's both text and a structured function call, print the text first
-                if function_call and text_content and not text_tool_calls:
-                    if text_content:
-                        console.print("\n[green]Assistant:[/green]")
-                        console.print(Panel(Markdown(text_content), border_style="blue"))
-                        console.print()
-
-                # If no tool calls at all, break the loop
-                if not function_call and not text_tool_calls:
+                # Check if we have any tool calls to process
+                has_tool_calls = function_call or text_tool_calls
+                if not has_tool_calls:
+                    # No tool calls, we're done with this iteration
+                    # Don't display here - let chat.py display the final response
                     break
+
+                # We have tool calls to process
+                # Prepare intermediate content for display
+                display_content = text_content
+                if text_tool_calls:
+                    # Remove the XML tags for cleaner display
+                    display_content = re.sub(r'<tool_call>.*?</tool_call>', '', text_content, flags=re.DOTALL).strip()
+                    logger.debug(f"Cleaned content after tool call extraction: {display_content}")
+
+                # Display intermediate text content (before processing tool calls)
+                if display_content:
+                    # Stop spinner before printing to avoid visual interference
+                    from .spinner import get_global_spinner
+                    spinner = get_global_spinner()
+                    if spinner:
+                        spinner.stop()
+
+                    console.print("\n[green]Assistant:[/green]")
+                    console.print(Panel(Markdown(display_content), border_style="blue"))
+                    console.print()
+
+                # Restart spinner for tool execution
+                # The spinner will show while tools execute and while waiting for next LLM response
+                from .spinner import get_global_spinner
+                spinner = get_global_spinner()
+                if spinner:
+                    spinner.start()
 
                 # Execute tool calls via MCP
                 if not self.mcp_client:

@@ -1,4 +1,4 @@
-# Core dependencies for OpenStack Upgrade Assistant
+# Core dependencies for OpenStack Assistant
 google-genai>=1.0.0
 mcp>=0.1.0
 prompt-toolkit>=3.0.0

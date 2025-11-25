@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get started with OpenStack Upgrade Assistant in 5 minutes!
+Get started with OpenStack Assistant in 5 minutes!
 
 ## 1. Install
 

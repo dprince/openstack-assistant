@@ -198,10 +198,26 @@ async def run_chat_mode(
 
             # Create confirmation handler for chat mode
             def confirmation_handler(tool_name: str, arguments: dict) -> bool:
+                # Import here to avoid circular dependency
+                from .spinner import get_global_spinner
+
+                # Stop the spinner before showing confirmation prompt
+                # This ensures the prompt appears on a clean new line
+                spinner = get_global_spinner()
+                if spinner:
+                    spinner.stop()
+
                 console.print(f"\n[yellow]Tool '{tool_name}' requires confirmation[/yellow]")
                 console.print(f"[dim]Arguments: {arguments}[/dim]")
                 response = input("Execute this tool? [y/N]: ").strip().lower()
-                return response in ['y', 'yes']
+                confirmed = response in ['y', 'yes']
+
+                # Restart the spinner after confirmation
+                # It will continue showing while the tool executes and LLM processes
+                if spinner:
+                    spinner.start()
+
+                return confirmed
 
             mcp_client = MCPClient(
                 mcp_command,

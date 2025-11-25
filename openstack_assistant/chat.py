@@ -16,6 +16,7 @@ from .config import Config
 from .gemini_client import GeminiClient
 from .granite_client import GraniteClient
 from .mcp_client import MCPClient
+from .spinner import StatusSpinner, set_global_spinner
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ class ChatInterface:
     def _display_welcome(self) -> None:
         """Display welcome message."""
         welcome_text = """
-# OpenStack Upgrade Assistant
+# OpenStack Assistant
 
 Welcome to the interactive chat interface!
 
@@ -125,7 +126,15 @@ Type your questions and press Enter to chat with the assistant.
         """
         logger.info("Displaying initial AI greeting")
         try:
-            response = self.llm_client.send_message("Tell me the state of my openstackversion resrouce. Then lets continue the upgrade process?")
+            # Use spinner for initial message too
+            spinner = StatusSpinner("Thinking")
+            set_global_spinner(spinner)
+
+            with spinner:
+                response = self.llm_client.send_message("Tell me the state of my openstackversion resrouce. Then lets continue the upgrade process?")
+
+            # Clear the global spinner reference
+            set_global_spinner(None)
 
             self.console.print("[green]Assistant:[/green]")
             self.console.print(Panel(Markdown(response), border_style="blue"))
@@ -133,6 +142,9 @@ Type your questions and press Enter to chat with the assistant.
 
         except Exception as e:
             logger.error(f"Error getting initial response: {e}")
+            # Make sure spinner is stopped on error
+            from .spinner import stop_global_spinner
+            stop_global_spinner()
             # Don't fail the whole chat if initial response fails, just log and continue
             logger.warning("Continuing chat session without initial response")
 
@@ -241,8 +253,16 @@ Type your questions and press Enter to chat with the assistant.
             message: The user's message
         """
         try:
-            # Send message without status indicator to avoid interference with MCP notifications
-            response = self.llm_client.send_message(message)
+            # Use spinner to show status while waiting for response
+            # The spinner will automatically stop if MCP confirmation is needed
+            spinner = StatusSpinner("Thinking")
+            set_global_spinner(spinner)
+
+            with spinner:
+                response = self.llm_client.send_message(message)
+
+            # Clear the global spinner reference
+            set_global_spinner(None)
 
             # Display response
             self.console.print("\n[green]Assistant:[/green]")
@@ -251,6 +271,9 @@ Type your questions and press Enter to chat with the assistant.
 
         except Exception as e:
             logger.error(f"Error handling message: {e}")
+            # Make sure spinner is stopped on error
+            from .spinner import get_global_spinner, stop_global_spinner
+            stop_global_spinner()
             self.console.print(f"[red]Error: Failed to get response from LLM. {e}[/red]")
 
     def _clear_history(self) -> None:

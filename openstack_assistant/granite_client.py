@@ -23,8 +23,7 @@ class GraniteClient:
     Attributes:
         config: Configuration object
         session: Requests session for API calls
-        messages: Conversation history
-        system_instruction: System instruction for the agent
+        messages: Conversation history (includes system instruction as first message if provided)
         tools: Available MCP tools
         mcp_client: MCP client for tool execution
     """
@@ -42,7 +41,6 @@ class GraniteClient:
             "Content-Type": "application/json"
         })
         self.messages = []
-        self.system_instruction = None
         self.tools = None
         self.mcp_client = None
         logger.info(f"Initialized Granite client with URL: {config.granite_url}")
@@ -152,11 +150,15 @@ class GraniteClient:
         # Initialize conversation with history if provided
         self.messages = history if history else []
 
-        # Store system instruction
-        self.system_instruction = system_instruction
+        # Add system instruction as first message if provided
+        # This aligns with Gemini's approach of setting it once at session start
         if system_instruction:
             logger.info("Starting chat session with system instruction")
             logger.debug(f"System instruction: {system_instruction}")
+            self.messages.insert(0, {
+                "role": "system",
+                "content": system_instruction
+            })
 
         # Store MCP client for tool execution
         self.mcp_client = mcp_client
@@ -201,13 +203,6 @@ class GraniteClient:
                     "temperature": self.config.granite_temperature
                 }
 
-                # Add system instruction if set
-                if self.system_instruction:
-                    # Insert system message at the beginning
-                    payload["messages"] = [
-                        {"role": "system", "content": self.system_instruction}
-                    ] + payload["messages"]
-
                 # Add tools if available
                 if self.tools:
                     payload["tools"] = self.tools
@@ -242,30 +237,43 @@ class GraniteClient:
                 content = assistant_message.get("content", "")
 
                 # If no structured tool calls, check for text-based tool calls
-                if not tool_calls:
+                if not tool_calls and content:
                     tool_calls = self._parse_text_tool_calls(content)
 
-                    # If we found text-based tool calls, strip them from content
-                    if tool_calls:
-                        # Remove the <tool_call> tags from the content for cleaner display
-                        clean_content = re.sub(r'<tool_call>.*?</tool_call>', '', content, flags=re.DOTALL).strip()
-                        # Update the message in history to use clean content
-                        self.messages[-1]["content"] = clean_content
-                        logger.debug(f"Cleaned content after tool call extraction: {clean_content}")
-                        # Print the cleaned content before processing tool calls
-                        if clean_content:
-                            console.print("\n[green]Assistant:[/green]")
-                            console.print(Panel(Markdown(clean_content), border_style="blue"))
-                            console.print()
-                elif content:
-                    # Structured tool calls with text content - print the text first
-                    console.print("\n[green]Assistant:[/green]")
-                    console.print(Panel(Markdown(content), border_style="blue"))
-                    console.print()
-
+                # If no tool calls, we're done - return the final response
                 if not tool_calls:
                     # No tool calls, return the text response
+                    # chat.py will display this final response
                     return assistant_message.get("content", "")
+
+                # We have tool calls to process
+                # Prepare content for display (this is an intermediate message)
+                display_content = content
+                if content and not assistant_message.get("tool_calls"):
+                    # Only clean if these were text-based tool calls (not structured)
+                    display_content = re.sub(r'<tool_call>.*?</tool_call>', '', content, flags=re.DOTALL).strip()
+                    # Update the message in history to use clean content
+                    self.messages[-1]["content"] = display_content
+                    logger.debug(f"Cleaned content after tool call extraction: {display_content}")
+
+                # Display intermediate text content (before processing tool calls)
+                if display_content:
+                    # Stop spinner before printing to avoid visual interference
+                    from .spinner import get_global_spinner
+                    spinner = get_global_spinner()
+                    if spinner:
+                        spinner.stop()
+
+                    console.print("\n[green]Assistant:[/green]")
+                    console.print(Panel(Markdown(display_content), border_style="blue"))
+                    console.print()
+
+                # Restart spinner for tool execution
+                # The spinner will show while tools execute and while waiting for next LLM response
+                from .spinner import get_global_spinner
+                spinner = get_global_spinner()
+                if spinner:
+                    spinner.start()
 
                 # Execute tool calls
                 if not self.mcp_client:
@@ -381,12 +389,6 @@ class GraniteClient:
                 "stream": True,
                 "temperature": self.config.granite_temperature
             }
-
-            # Add system instruction if set
-            if self.system_instruction:
-                payload["messages"] = [
-                    {"role": "system", "content": self.system_instruction}
-                ] + payload["messages"]
 
             # Add tools if available
             if self.tools:
