@@ -79,14 +79,13 @@ class ChatInterface:
             self.console.print("[cyan]Agent identity configured from system instruction file[/cyan]\n")
 
         # Display available MCP tools if connected
-        if self.mcp_client:
-            self._display_mcp_tools()
-            if mcp_tools:
-                self.console.print("[cyan]MCP tools are now available to the LLM for autonomous use[/cyan]\n")
+        #if self.mcp_client:
+            #self._display_mcp_tools()
+            #if mcp_tools:
+                #self.console.print("[cyan]MCP tools are now available to the LLM for autonomous use[/cyan]\n")
 
         # Display initial AI greeting
-        if system_instruction:
-            self._display_initial_greeting()
+        self._display_initial_greeting()
 
         # Enter chat loop
         try:
@@ -124,9 +123,9 @@ Type your questions and press Enter to chat with the assistant.
 
         Triggers the AI to auto-execute step 1 as specified in the system instruction.
         """
+        logger.info("Displaying initial AI greeting")
         try:
-            with self.console.status("[cyan]Starting assistant...[/cyan]", spinner="dots"):
-                response = self.llm_client.send_message("Begin the upgrade process.")
+            response = self.llm_client.send_message("Tell me the state of my openstackversion resrouce. Then lets continue the upgrade process?")
 
             self.console.print("[green]Assistant:[/green]")
             self.console.print(Panel(Markdown(response), border_style="blue"))
@@ -242,10 +241,8 @@ Type your questions and press Enter to chat with the assistant.
             message: The user's message
         """
         try:
-            # Always show thinking indicator
-            # MCP tool notifications will still display via console.print()
-            with self.console.status("[cyan]Thinking...[/cyan]", spinner="dots"):
-                response = self.llm_client.send_message(message)
+            # Send message without status indicator to avoid interference with MCP notifications
+            response = self.llm_client.send_message(message)
 
             # Display response
             self.console.print("\n[green]Assistant:[/green]")
@@ -260,46 +257,3 @@ Type your questions and press Enter to chat with the assistant.
         """Clear the conversation history."""
         self.llm_client.clear_history()
         self.console.print("[yellow]Conversation history cleared.[/yellow]")
-
-    def send_single_message(self, message: str) -> None:
-        """Send a single message (non-interactive mode).
-
-        Args:
-            message: The message to send
-        """
-        try:
-            # Start chat if not already started
-            # Check for both GeminiClient and GraniteClient session attributes
-            has_session = (hasattr(self.llm_client, 'chat_session') and self.llm_client.chat_session) or \
-                         (hasattr(self.llm_client, 'messages') and self.llm_client.messages)
-
-            if not has_session:
-                system_instruction = self._load_system_instruction()
-
-                # Get MCP tools if connected
-                mcp_tools = None
-                if self.mcp_client:
-                    mcp_tools = self.mcp_client.get_available_tools()
-
-                self.llm_client.start_chat(
-                    system_instruction=system_instruction,
-                    tools=mcp_tools,
-                    mcp_client=self.mcp_client
-                )
-                if system_instruction:
-                    self.console.print("[cyan]Agent identity configured from system instruction file[/cyan]\n")
-                if mcp_tools:
-                    self.console.print("[cyan]MCP tools are now available to the LLM for autonomous use[/cyan]\n")
-
-            # Always show thinking indicator
-            # MCP tool notifications will still display via console.print()
-            with self.console.status("[cyan]Thinking...[/cyan]", spinner="dots"):
-                response = self.llm_client.send_message(message)
-
-            # Display response
-            self.console.print(Panel(Markdown(response), title="Response", border_style="blue"))
-
-        except Exception as e:
-            logger.error(f"Error sending message: {e}")
-            self.console.print(f"[red]Error: {e}[/red]")
-            sys.exit(1)

@@ -1,9 +1,9 @@
 """Configuration management for the OpenStack Upgrade Assistant."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -23,6 +23,7 @@ class Config:
         workflow_file: Path to workflow definition file
         system_instruction_file: Path to system instruction file for chat mode
         namespace: Default Kubernetes namespace to use
+        mcp_tool_confirm_prefixes: List of tool name prefixes that require user confirmation
     """
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.5-flash"
@@ -34,6 +35,7 @@ class Config:
     workflow_file: Optional[Path] = None
     system_instruction_file: Optional[Path] = None
     namespace: Optional[str] = None
+    mcp_tool_confirm_prefixes: List[str] = field(default_factory=lambda: ["create_", "watch_", "update_"])
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -107,6 +109,13 @@ class Config:
         # Load namespace
         namespace = os.getenv("NAMESPACE")
 
+        # Load MCP tool confirmation prefixes
+        mcp_tool_confirm_prefixes = ["create_", "watch_", "update_"]  # defaults
+        prefixes_str = os.getenv("MCP_TOOL_CONFIRM_PREFIXES")
+        if prefixes_str:
+            # Parse comma-separated list
+            mcp_tool_confirm_prefixes = [p.strip() for p in prefixes_str.split(",") if p.strip()]
+
         return cls(
             gemini_api_key=gemini_api_key,
             gemini_model=gemini_model,
@@ -118,4 +127,5 @@ class Config:
             workflow_file=workflow_file,
             system_instruction_file=system_instruction_file,
             namespace=namespace,
+            mcp_tool_confirm_prefixes=mcp_tool_confirm_prefixes,
         )

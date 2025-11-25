@@ -1,16 +1,22 @@
 """Gemini API client for the OpenStack Upgrade Assistant."""
 
 import asyncio
+import json
 import logging
+import re
 import sys
 from typing import Any, Dict, Iterator, List, Optional
 
 from google import genai
 from google.genai import types
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
 
 from .config import Config
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 
 class GeminiClient:
@@ -61,6 +67,54 @@ class GeminiClient:
                 logger.warning(f"Failed to convert MCP tool {mcp_tool.get('name', 'unknown')}: {e}")
 
         return gemini_tools
+
+    def _parse_text_tool_calls(self, content: str) -> Optional[List[Dict[str, Any]]]:
+        """Parse XML-like tool call tags from text content.
+
+        Some models return tool calls as XML-like text tags instead of
+        using structured function calling. This method extracts those calls.
+
+        Args:
+            content: The text content from the assistant's response
+
+        Returns:
+            List of tool call dictionaries, or None if no tool calls found
+        """
+        if not content or "<tool_call>" not in content:
+            return None
+
+        tool_calls = []
+        # Capture everything between <tool_call> and </tool_call> tags
+        pattern = r'<tool_call>\s*(.*?)\s*</tool_call>'
+        matches = re.finditer(pattern, content, re.DOTALL)
+
+        for match in matches:
+            json_str = match.group(1).strip()
+
+            if not json_str:
+                continue
+
+            # Check if JSON appears truncated (missing closing brace)
+            is_truncated = False
+            if json_str.count('{') > json_str.count('}'):
+                logger.warning(f"Tool call appears truncated (unmatched braces): {json_str[:100]}...")
+                is_truncated = True
+                # Try to fix by adding missing closing braces
+                missing_braces = json_str.count('{') - json_str.count('}')
+                json_str += '}' * missing_braces
+                logger.debug(f"Attempting to fix truncated JSON by adding {missing_braces} closing brace(s)")
+
+            try:
+                tool_call_json = json.loads(json_str)
+                tool_calls.append(tool_call_json)
+                status = "truncated but recovered" if is_truncated else "complete"
+                logger.info(f"Parsed text-based tool call ({status}): {tool_call_json.get('name')} with args {tool_call_json.get('arguments', {})}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse tool call JSON '{json_str[:100]}...': {e}")
+                logger.debug(f"Full JSON string that failed to parse: {json_str}")
+                continue
+
+        return tool_calls if tool_calls else None
 
     def start_chat(
         self,
@@ -142,132 +196,176 @@ class GeminiClient:
                 if not candidate.content or not candidate.content.parts:
                     break
 
-                # Look for function call in the parts
+                # Look for function call and text in the parts
                 function_call = None
+                text_parts = []
                 for part in candidate.content.parts:
                     if hasattr(part, 'function_call') and part.function_call:
                         function_call = part.function_call
-                        break
+                    elif hasattr(part, 'text') and part.text:
+                        text_parts.append(part.text)
 
-                if not function_call:
-                    # No function call, return the text response
+                # Combine all text parts
+                text_content = ''.join(text_parts).strip()
+
+                # Check for text-based tool calls if no structured function call
+                text_tool_calls = None
+                if not function_call and text_content:
+                    text_tool_calls = self._parse_text_tool_calls(text_content)
+                    if text_tool_calls:
+                        # Remove the <tool_call> tags from the content for cleaner display
+                        clean_content = re.sub(r'<tool_call>.*?</tool_call>', '', text_content, flags=re.DOTALL).strip()
+                        logger.debug(f"Cleaned content after tool call extraction: {clean_content}")
+                        # Print the cleaned content before processing tool calls
+                        if clean_content:
+                            console.print("\n[green]Assistant:[/green]")
+                            console.print(Panel(Markdown(clean_content), border_style="blue"))
+                            console.print()
+
+                # If there's both text and a structured function call, print the text first
+                if function_call and text_content and not text_tool_calls:
+                    if text_content:
+                        console.print("\n[green]Assistant:[/green]")
+                        console.print(Panel(Markdown(text_content), border_style="blue"))
+                        console.print()
+
+                # If no tool calls at all, break the loop
+                if not function_call and not text_tool_calls:
                     break
 
-                # Execute the function call via MCP
+                # Execute tool calls via MCP
                 if not self.mcp_client:
-                    logger.error("Function call requested but no MCP client available")
+                    logger.error("Tool call requested but no MCP client available")
                     break
 
-                # Ask user for confirmation before executing the tool
-                logger.info(f"LLM wants to execute MCP tool: {function_call.name}")
-                logger.debug(f"Tool arguments: {dict(function_call.args)}")
-
-                # Format the tool call for user review
-                print(f"\n[Tool Call Request]")
-                print(f"Tool: {function_call.name}")
-                print(f"Arguments: {dict(function_call.args)}")
-
-                # Prompt user for confirmation
-                user_approved = False
-                while True:
+                # Process structured function call
+                if function_call:
                     try:
-                        user_response = input("\nProceed with this tool call? [y/n]: ").strip().lower()
-                        if user_response in ['y', 'yes']:
-                            user_approved = True
-                            break
-                        elif user_response in ['n', 'no']:
-                            # User rejected the tool call - send error back to model
-                            logger.info("User rejected tool call")
-                            error_response = types.Part(
-                                function_response=types.FunctionResponse(
-                                    name=function_call.name,
-                                    response={"error": "User rejected tool execution"}
-                                )
+                        logger.info(f"LLM wants to execute MCP tool: {function_call.name}")
+                        logger.debug(f"Tool arguments: {dict(function_call.args)}")
+
+                        # Execute the tool via MCP
+                        # We need to handle the case where we're already in an event loop
+                        def run_async_in_thread(coro):
+                            """Run an async coroutine in a new thread with its own event loop."""
+                            import threading
+                            result_container = {}
+                            exception_container = {}
+
+                            def run_in_new_loop():
+                                try:
+                                    new_loop = asyncio.new_event_loop()
+                                    asyncio.set_event_loop(new_loop)
+                                    try:
+                                        result_container['result'] = new_loop.run_until_complete(coro)
+                                    finally:
+                                        new_loop.close()
+                                except Exception as e:
+                                    exception_container['exception'] = e
+
+                            thread = threading.Thread(target=run_in_new_loop)
+                            thread.start()
+                            thread.join()
+
+                            if 'exception' in exception_container:
+                                raise exception_container['exception']
+                            return result_container['result']
+
+                        result = run_async_in_thread(
+                            self.mcp_client.call_tool(
+                                function_call.name,
+                                dict(function_call.args)
                             )
-                            response = self.chat_session.send_message(error_response)
-                            iteration += 1
-                            # Break out of confirmation loop and continue with outer while loop
-                            break
-                        else:
-                            print("Please enter 'y' or 'n'")
-                            continue
-                    except (EOFError, KeyboardInterrupt):
-                        logger.info("User interrupted tool call confirmation")
-                        print("\nTool call cancelled")
+                        )
+
+                        logger.debug(f"Tool result: {result}")
+
+                        # Send the function result back to Gemini
+                        function_response = types.Part(
+                            function_response=types.FunctionResponse(
+                                name=function_call.name,
+                                response={"result": result}
+                            )
+                        )
+
+                        response = self.chat_session.send_message(function_response)
+                        iteration += 1
+
+                    except Exception as e:
+                        logger.error(f"Error executing MCP tool {function_call.name}: {e}")
+                        # Send error back to the model
                         error_response = types.Part(
                             function_response=types.FunctionResponse(
                                 name=function_call.name,
-                                response={"error": "User cancelled tool execution"}
+                                response={"error": str(e)}
                             )
                         )
                         response = self.chat_session.send_message(error_response)
                         iteration += 1
-                        break
 
-                # If user rejected, continue to next iteration
-                if not user_approved:
-                    continue
+                # Process text-based tool calls
+                elif text_tool_calls:
+                    for tool_call in text_tool_calls:
+                        try:
+                            tool_name = tool_call.get("name")
+                            tool_args = tool_call.get("arguments", {})
 
-                try:
-                    logger.info(f"Executing MCP tool: {function_call.name}")
+                            logger.info(f"LLM wants to execute MCP tool (text-based): {tool_name}")
+                            logger.debug(f"Tool arguments: {tool_args}")
 
-                    # Execute the tool via MCP
-                    # We need to handle the case where we're already in an event loop
-                    def run_async_in_thread(coro):
-                        """Run an async coroutine in a new thread with its own event loop."""
-                        import threading
-                        result_container = {}
-                        exception_container = {}
+                            # Execute the tool via MCP
+                            def run_async_in_thread(coro):
+                                """Run an async coroutine in a new thread with its own event loop."""
+                                import threading
+                                result_container = {}
+                                exception_container = {}
 
-                        def run_in_new_loop():
-                            try:
-                                new_loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(new_loop)
-                                try:
-                                    result_container['result'] = new_loop.run_until_complete(coro)
-                                finally:
-                                    new_loop.close()
-                            except Exception as e:
-                                exception_container['exception'] = e
+                                def run_in_new_loop():
+                                    try:
+                                        new_loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(new_loop)
+                                        try:
+                                            result_container['result'] = new_loop.run_until_complete(coro)
+                                        finally:
+                                            new_loop.close()
+                                    except Exception as e:
+                                        exception_container['exception'] = e
 
-                        thread = threading.Thread(target=run_in_new_loop)
-                        thread.start()
-                        thread.join()
+                                thread = threading.Thread(target=run_in_new_loop)
+                                thread.start()
+                                thread.join()
 
-                        if 'exception' in exception_container:
-                            raise exception_container['exception']
-                        return result_container['result']
+                                if 'exception' in exception_container:
+                                    raise exception_container['exception']
+                                return result_container['result']
 
-                    result = run_async_in_thread(
-                        self.mcp_client.call_tool(
-                            function_call.name,
-                            dict(function_call.args)
-                        )
-                    )
+                            result = run_async_in_thread(
+                                self.mcp_client.call_tool(tool_name, tool_args)
+                            )
 
-                    logger.debug(f"Tool result: {result}")
+                            logger.debug(f"Tool result: {result}")
 
-                    # Send the function result back to Gemini
-                    function_response = types.Part(
-                        function_response=types.FunctionResponse(
-                            name=function_call.name,
-                            response={"result": result}
-                        )
-                    )
+                            # Send the function result back to Gemini
+                            function_response = types.Part(
+                                function_response=types.FunctionResponse(
+                                    name=tool_name,
+                                    response={"result": result}
+                                )
+                            )
 
-                    response = self.chat_session.send_message(function_response)
-                    iteration += 1
+                            response = self.chat_session.send_message(function_response)
 
-                except Exception as e:
-                    logger.error(f"Error executing MCP tool {function_call.name}: {e}")
-                    # Send error back to the model
-                    error_response = types.Part(
-                        function_response=types.FunctionResponse(
-                            name=function_call.name,
-                            response={"error": str(e)}
-                        )
-                    )
-                    response = self.chat_session.send_message(error_response)
+                        except Exception as e:
+                            logger.error(f"Error executing MCP tool {tool_name}: {e}")
+                            # Send error back to the model
+                            error_response = types.Part(
+                                function_response=types.FunctionResponse(
+                                    name=tool_name,
+                                    response={"error": str(e)}
+                                )
+                            )
+                            response = self.chat_session.send_message(error_response)
+
                     iteration += 1
 
             if iteration >= max_iterations:

@@ -16,7 +16,6 @@ from .config import Config
 from .gemini_client import GeminiClient
 from .granite_client import GraniteClient
 from .mcp_client import MCPClient
-from .workflow import Workflow, WorkflowRunner
 
 # Setup logging
 logging.basicConfig(
@@ -104,34 +103,11 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Suppress non-error output",
     )
 
-    # Chat mode arguments
-    parser.add_argument(
-        "-i",
-        "--interactive",
-        action="store_true",
-        help="Start interactive chat session (default if no message provided)",
-    )
-
-    parser.add_argument(
-        "-m",
-        "--message",
-        type=str,
-        help="Send a single message and exit",
-    )
-
     # MCP arguments
     parser.add_argument(
         "--mcp-server",
         type=str,
         help="Command to start MCP server (e.g., 'npx @modelcontextprotocol/server-filesystem /path')",
-    )
-
-    # Workflow arguments
-    parser.add_argument(
-        "-w",
-        "--workflow",
-        type=Path,
-        help="Path to workflow JSON file to execute",
     )
 
     # LLM Configuration
@@ -178,98 +154,15 @@ def setup_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def run_workflow_mode(
-    config: Config,
-    workflow_path: Path,
-    mcp_command: Optional[str] = None,
-    provider: Optional[str] = None,
-) -> int:
-    """Run workflow mode.
-
-    Args:
-        config: Configuration object
-        workflow_path: Path to workflow file
-        mcp_command: Optional MCP server command
-        provider: Optional LLM provider ('gemini' or 'granite')
-
-    Returns:
-        Exit code (0 for success, 1 for failure)
-    """
-    console = Console()
-
-    try:
-        # Load workflow
-        workflow = Workflow.from_file(workflow_path)
-        console.print(f"[cyan]Loading workflow: {workflow.name}[/cyan]")
-        console.print(f"[dim]{workflow.description}[/dim]\n")
-
-        # Initialize LLM client
-        llm_client = create_llm_client(config, provider)
-
-        mcp_client = None
-        if mcp_command:
-            console.print(f"[cyan]Connecting to MCP server...[/cyan]")
-
-            # Create notification handler that uses Rich console
-            def notification_handler(notification):
-                method = notification.get("method", "")
-                params = notification.get("params", {})
-                if method == "notifications/message":
-                    level = params.get("level", "info")
-                    message = params.get("message", "")
-                    # Use Rich console for formatted output
-                    level_colors = {
-                        "debug": "dim",
-                        "info": "cyan",
-                        "warning": "yellow",
-                        "error": "red"
-                    }
-                    color = level_colors.get(level.lower(), "white")
-                    console.print(f"[{color}][MCP {level.upper()}] {message}[/{color}]")
-
-            mcp_client = MCPClient(mcp_command, notification_handler=notification_handler)
-            await mcp_client.connect()
-            console.print(f"[green]Connected to MCP server[/green]\n")
-
-        # Run workflow
-        runner = WorkflowRunner(llm_client, mcp_client)
-        results = await runner.run_workflow(workflow)
-
-        # Display results
-        console.print("\n[green]Workflow completed successfully![/green]\n")
-        console.print("[cyan]Results:[/cyan]")
-        for i, result in enumerate(results, 1):
-            console.print(f"\n{i}. {result['step']} ({result['type']})")
-            if "error" in result:
-                console.print(f"   [red]Error: {result['error']}[/red]")
-            else:
-                console.print(f"   [green]Result: {result['result']}[/green]")
-
-        # Cleanup
-        if mcp_client:
-            await mcp_client.disconnect()
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"Workflow execution failed: {e}")
-        console.print(f"[red]Error: {e}[/red]")
-        return 1
-
-
 async def run_chat_mode(
     config: Config,
-    interactive: bool = True,
-    message: Optional[str] = None,
     mcp_command: Optional[str] = None,
     provider: Optional[str] = None,
 ) -> int:
-    """Run chat mode.
+    """Run interactive chat mode.
 
     Args:
         config: Configuration object
-        interactive: Whether to run in interactive mode
-        message: Optional single message to send
         mcp_command: Optional MCP server command
         provider: Optional LLM provider ('gemini' or 'granite')
 
@@ -303,20 +196,25 @@ async def run_chat_mode(
                     color = level_colors.get(level.lower(), "white")
                     console.print(f"[{color}][MCP {level.upper()}] {message}[/{color}]")
 
-            mcp_client = MCPClient(mcp_command, notification_handler=notification_handler)
+            # Create confirmation handler for chat mode
+            def confirmation_handler(tool_name: str, arguments: dict) -> bool:
+                console.print(f"\n[yellow]Tool '{tool_name}' requires confirmation[/yellow]")
+                console.print(f"[dim]Arguments: {arguments}[/dim]")
+                response = input("Execute this tool? [y/N]: ").strip().lower()
+                return response in ['y', 'yes']
+
+            mcp_client = MCPClient(
+                mcp_command,
+                notification_handler=notification_handler,
+                confirmation_handler=confirmation_handler,
+                confirm_prefixes=config.mcp_tool_confirm_prefixes
+            )
             await mcp_client.connect()
             console.print("[green]Connected to MCP server[/green]\n")
 
-        # Create chat interface
+        # Create chat interface and start interactive session
         chat = ChatInterface(llm_client, config, mcp_client)
-
-        # Run in appropriate mode
-        if message:
-            # Single message mode
-            chat.send_single_message(message)
-        else:
-            # Interactive mode
-            await chat.start()
+        await chat.start()
 
         # Cleanup
         if mcp_client:
@@ -369,14 +267,8 @@ def main() -> int:
         # Determine MCP command
         mcp_command = args.mcp_server or config.mcp_server_command
 
-        # Run appropriate mode
-        if args.workflow:
-            # Workflow mode
-            return asyncio.run(run_workflow_mode(config, args.workflow, mcp_command, args.provider))
-        else:
-            # Chat mode (interactive or single message)
-            interactive = args.interactive or not args.message
-            return asyncio.run(run_chat_mode(config, interactive, args.message, mcp_command, args.provider))
+        # Run interactive chat mode
+        return asyncio.run(run_chat_mode(config, mcp_command, args.provider))
 
     except ValueError as e:
         console = Console()

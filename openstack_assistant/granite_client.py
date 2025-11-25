@@ -7,10 +7,14 @@ import re
 from typing import Any, Dict, Iterator, List, Optional
 
 import requests
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
 
 from .config import Config
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 
 class GraniteClient:
@@ -87,16 +91,26 @@ class GraniteClient:
             return None
 
         tool_calls = []
-        # Find all <tool_call>...</tool_call> blocks
-        # Split by the tags and extract JSON content
-        parts = content.split("<tool_call>")
+        # Use regex to find all <tool_call>...</tool_call> blocks
+        # Capture everything between tags (not just matching braces)
+        pattern = r'<tool_call>\s*(.*?)\s*</tool_call>'
+        matches = re.finditer(pattern, content, re.DOTALL)
 
-        for idx, part in enumerate(parts[1:], start=0):  # Skip first part (before first tag)
-            if "</tool_call>" not in part:
+        for idx, match in enumerate(matches):
+            json_str = match.group(1).strip()
+
+            if not json_str:
                 continue
 
-            # Extract content between <tool_call> and </tool_call>
-            json_str = part.split("</tool_call>")[0].strip()
+            # Check if JSON appears truncated (missing closing brace)
+            is_truncated = False
+            if json_str.count('{') > json_str.count('}'):
+                logger.warning(f"Tool call appears truncated (unmatched braces): {json_str[:100]}...")
+                is_truncated = True
+                # Try to fix by adding missing closing braces
+                missing_braces = json_str.count('{') - json_str.count('}')
+                json_str += '}' * missing_braces
+                logger.debug(f"Attempting to fix truncated JSON by adding {missing_braces} closing brace(s)")
 
             try:
                 tool_call_json = json.loads(json_str)
@@ -110,9 +124,12 @@ class GraniteClient:
                     }
                 }
                 tool_calls.append(tool_call)
-                logger.info(f"Parsed text-based tool call: {tool_call['function']['name']} with args {tool_call['function']['arguments']}")
+                status = "truncated but recovered" if is_truncated else "complete"
+                logger.info(f"Parsed text-based tool call ({status}): {tool_call['function']['name']} with args {tool_call['function']['arguments']}")
             except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse tool call JSON '{json_str}': {e}")
+                logger.error(f"Failed to parse tool call JSON '{json_str[:100]}...': {e}")
+                # Log more context to help debug
+                logger.debug(f"Full JSON string that failed to parse: {json_str}")
                 continue
 
         return tool_calls if tool_calls else None
@@ -222,18 +239,29 @@ class GraniteClient:
 
                 # Check if there are tool calls (structured format)
                 tool_calls = assistant_message.get("tool_calls")
+                content = assistant_message.get("content", "")
 
                 # If no structured tool calls, check for text-based tool calls
                 if not tool_calls:
-                    content = assistant_message.get("content", "")
                     tool_calls = self._parse_text_tool_calls(content)
 
                     # If we found text-based tool calls, strip them from content
                     if tool_calls:
                         # Remove the <tool_call> tags from the content for cleaner display
                         clean_content = re.sub(r'<tool_call>.*?</tool_call>', '', content, flags=re.DOTALL).strip()
+                        # Update the message in history to use clean content
+                        self.messages[-1]["content"] = clean_content
+                        logger.debug(f"Cleaned content after tool call extraction: {clean_content}")
+                        # Print the cleaned content before processing tool calls
                         if clean_content:
-                            logger.debug(f"Cleaned content after tool call extraction: {clean_content}")
+                            console.print("\n[green]Assistant:[/green]")
+                            console.print(Panel(Markdown(clean_content), border_style="blue"))
+                            console.print()
+                elif content:
+                    # Structured tool calls with text content - print the text first
+                    console.print("\n[green]Assistant:[/green]")
+                    console.print(Panel(Markdown(content), border_style="blue"))
+                    console.print()
 
                 if not tool_calls:
                     # No tool calls, return the text response
@@ -261,53 +289,9 @@ class GraniteClient:
                         logger.warning(f"Unexpected function arguments type: {type(function_args)}")
                         function_args = {}
 
-                    # Ask user for confirmation before executing the tool
-                    logger.info(f"LLM wants to execute MCP tool: {function_name}")
-                    logger.debug(f"Tool arguments: {function_args}")
-
-                    # Format the tool call for user review
-                    print(f"\n[Tool Call Request]")
-                    print(f"Tool: {function_name}")
-                    print(f"Arguments: {function_args}")
-
-                    # Prompt user for confirmation
-                    user_approved = False
-                    while True:
-                        try:
-                            user_response = input("\nProceed with this tool call? [y/n]: ").strip().lower()
-                            if user_response in ['y', 'yes']:
-                                user_approved = True
-                                break
-                            elif user_response in ['n', 'no']:
-                                # User rejected the tool call - add error to messages
-                                logger.info("User rejected tool call")
-                                self.messages.append({
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.get("id"),
-                                    "name": function_name,
-                                    "content": "Error: User rejected tool execution"
-                                })
-                                break
-                            else:
-                                print("Please enter 'y' or 'n'")
-                                continue
-                        except (EOFError, KeyboardInterrupt):
-                            logger.info("User interrupted tool call confirmation")
-                            print("\nTool call cancelled")
-                            self.messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.get("id"),
-                                "name": function_name,
-                                "content": "Error: User cancelled tool execution"
-                            })
-                            break
-
-                    # If user rejected, skip to next tool call
-                    if not user_approved:
-                        continue
-
                     try:
-                        logger.info(f"Executing MCP tool: {function_name}")
+                        logger.info(f"LLM wants to execute MCP tool: {function_name}")
+                        logger.debug(f"Tool arguments: {function_args}")
 
                         # Execute the tool via MCP
                         def run_async_in_thread(coro):
