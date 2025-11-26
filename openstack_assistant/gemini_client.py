@@ -1,5 +1,6 @@
 """Gemini API client for the OpenStack Upgrade Assistant."""
 
+import ast
 import asyncio
 import json
 import logging
@@ -84,35 +85,34 @@ class GeminiClient:
             return None
 
         tool_calls = []
-        # Capture everything between <tool_call> and </tool_call> tags
         pattern = r'<tool_call>\s*(.*?)\s*</tool_call>'
         matches = re.finditer(pattern, content, re.DOTALL)
 
         for match in matches:
             json_str = match.group(1).strip()
-
             if not json_str:
                 continue
 
-            # Check if JSON appears truncated (missing closing brace)
-            is_truncated = False
-            if json_str.count('{') > json_str.count('}'):
-                logger.warning(f"Tool call appears truncated (unmatched braces): {json_str[:100]}...")
-                is_truncated = True
-                # Try to fix by adding missing closing braces
-                missing_braces = json_str.count('{') - json_str.count('}')
-                json_str += '}' * missing_braces
-                logger.debug(f"Attempting to fix truncated JSON by adding {missing_braces} closing brace(s)")
-
+            # Try parsing as JSON first, then Python dict syntax
+            tool_call_json = None
             try:
                 tool_call_json = json.loads(json_str)
-                tool_calls.append(tool_call_json)
-                status = "truncated but recovered" if is_truncated else "complete"
-                logger.info(f"Parsed text-based tool call ({status}): {tool_call_json.get('name')} with args {tool_call_json.get('arguments', {})}")
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse tool call JSON '{json_str[:100]}...': {e}")
-                logger.debug(f"Full JSON string that failed to parse: {json_str}")
+            except json.JSONDecodeError:
+                try:
+                    # Fallback to Python dict syntax (single quotes)
+                    tool_call_json = ast.literal_eval(json_str)
+                except (ValueError, SyntaxError) as e:
+                    logger.error(f"Failed to parse tool call '{json_str[:100]}...': {e}")
+                    continue
+
+            # Validate required fields
+            tool_name = tool_call_json.get("name") if isinstance(tool_call_json, dict) else None
+            if not tool_name:
+                logger.error(f"Tool call missing 'name' field: {tool_call_json}")
                 continue
+
+            tool_calls.append(tool_call_json)
+            logger.info(f"Parsed tool call: {tool_name}")
 
         return tool_calls if tool_calls else None
 
@@ -385,6 +385,16 @@ class GeminiClient:
             if iteration >= max_iterations:
                 logger.warning("Maximum function calling iterations reached")
 
+            # Extract text from response, even if it contains function calls
+            # This handles the case where we hit max iterations with pending function calls
+            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                text_parts = []
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        text_parts.append(part.text)
+                return ''.join(text_parts).strip()
+
+            # Fallback to response.text (may trigger warning if function calls present)
             return response.text
 
         except Exception as e:
