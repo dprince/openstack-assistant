@@ -44,6 +44,7 @@ class GraniteClient:
         self.messages = []
         self.tools = None
         self.mcp_client = None
+        self.last_usage_metadata = None  # Store usage metadata from last response
         logger.info(f"Initialized Granite client with URL: {config.granite_url}")
 
     def _convert_mcp_tools_to_granite_format(self, mcp_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -75,10 +76,12 @@ class GraniteClient:
         return granite_tools
 
     def _parse_text_tool_calls(self, content: str) -> Optional[List[Dict[str, Any]]]:
-        """Parse XML-like tool call tags from text content.
+        """Parse tool calls from text content.
 
-        Some Granite models return tool calls as XML-like text tags instead of
-        using structured function calling. This method extracts those calls.
+        Granite models may return tool calls in various formats:
+        1. XML tags: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+        2. Plain JSON: {"name": "...", "arguments": {...}}
+        3. Natural language: "I will call the X tool with {...}"
 
         Args:
             content: The text content from the assistant's response
@@ -86,68 +89,147 @@ class GraniteClient:
         Returns:
             List of tool calls in OpenAI format, or None if no tool calls found
         """
-        if not content or "<tool_call>" not in content:
+        if not content or not self.tools:
             return None
 
         tool_calls = []
-        pattern = r'<tool_call>\s*(.*?)\s*</tool_call>'
-        matches = re.finditer(pattern, content, re.DOTALL)
 
-        for idx, match in enumerate(matches):
-            json_str = match.group(1).strip()
-            if not json_str:
-                continue
+        # Build a set of valid tool names for quick lookup
+        valid_tool_names = {t['function']['name'] for t in self.tools if 'function' in t}
 
-            # Try parsing as JSON first, then Python dict syntax
-            tool_call_json = None
-            try:
-                tool_call_json = json.loads(json_str)
-            except json.JSONDecodeError:
+        # Strategy 1: Extract from <tool_call> XML tags (most reliable)
+        if "<tool_call>" in content:
+            pattern = r'<tool_call>\s*(.*?)\s*</tool_call>'
+            for idx, match in enumerate(re.finditer(pattern, content, re.DOTALL)):
+                json_str = match.group(1).strip()
+                if json_str:
+                    tool_call = self._parse_tool_call_json(json_str, idx, valid_tool_names)
+                    if tool_call:
+                        tool_calls.append(tool_call)
+                        logger.info(f"Found tool call in XML tags: {tool_call['function']['name']}")
+
+            # If we found XML tags, only use those (don't mix strategies)
+            return tool_calls if tool_calls else None
+
+        # Strategy 2: Look for standalone JSON objects with "name" field
+        # Match JSON objects that contain a "name" field with a valid tool name
+        for tool_name in valid_tool_names:
+            # Pattern: {"name": "tool_name", "arguments": {...}} or {'name': 'tool_name', 'arguments': {...}}
+            patterns = [
+                rf'\{{\s*["\']name["\']\s*:\s*["\']({re.escape(tool_name)})["\']\s*,\s*["\']arguments["\']\s*:\s*(\{{[^}}]*\}})\s*\}}',
+                rf'\{{\s*["\']arguments["\']\s*:\s*(\{{[^}}]*\}})\s*,\s*["\']name["\']\s*:\s*["\']({re.escape(tool_name)})["\']\s*\}}'
+            ]
+
+            for pattern in patterns:
+                for match in re.finditer(pattern, content, re.DOTALL):
+                    try:
+                        # Extract the full JSON object
+                        full_json = match.group(0)
+                        tool_call = self._parse_tool_call_json(full_json, len(tool_calls), valid_tool_names)
+                        if tool_call:
+                            tool_calls.append(tool_call)
+                            logger.info(f"Found tool call in JSON: {tool_call['function']['name']}")
+                    except Exception as e:
+                        logger.debug(f"Failed to parse JSON match: {e}")
+                        continue
+
+        if tool_calls:
+            return tool_calls
+
+        # Strategy 3: Natural language mentions with arguments
+        # Pattern: "call the X tool" followed by JSON-like arguments
+        for tool_name in valid_tool_names:
+            pattern = rf'(?:call|execute|use|invoke)(?:\s+the)?\s+{re.escape(tool_name)}\s+tool[^{{]*(\{{[^}}]*\}})'
+            for idx, match in enumerate(re.finditer(pattern, content, re.DOTALL | re.IGNORECASE)):
+                args_str = match.group(1).strip()
                 try:
-                    # Granite sometimes uses Python dict syntax (single quotes)
-                    tool_call_json = ast.literal_eval(json_str)
-                except (ValueError, SyntaxError) as e:
-                    logger.error(f"Failed to parse tool call '{json_str[:100]}...': {e}")
-                    continue
-
-            # Handle nested content format: {'content': [{'type': 'text', 'text': '{...}'}]}
-            if isinstance(tool_call_json, dict) and 'content' in tool_call_json:
-                content_array = tool_call_json.get('content', [])
-                if content_array and isinstance(content_array, list):
-                    for content_item in content_array:
-                        if isinstance(content_item, dict) and content_item.get('type') == 'text':
-                            text_content = content_item.get('text', '')
-                            if text_content:
-                                try:
-                                    # Parse the nested JSON/dict
-                                    tool_call_json = json.loads(text_content)
-                                    break
-                                except json.JSONDecodeError:
-                                    try:
-                                        tool_call_json = ast.literal_eval(text_content)
-                                        break
-                                    except (ValueError, SyntaxError):
-                                        continue
-
-            # Validate required fields
-            tool_name = tool_call_json.get("name") if isinstance(tool_call_json, dict) else None
-            if not tool_name:
-                logger.error(f"Tool call missing 'name' field: {tool_call_json}")
-                continue
-
-            # Convert to OpenAI format
-            tool_call = {
-                "id": f"call_{idx}",
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "arguments": tool_call_json.get("arguments", {})
-                }
-            }
-            tool_calls.append(tool_call)
-            logger.info(f"Parsed tool call: {tool_name}")
+                    arguments = json.loads(args_str)
+                    if isinstance(arguments, dict):
+                        tool_call = {
+                            "id": f"call_{len(tool_calls)}",
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": arguments
+                            }
+                        }
+                        tool_calls.append(tool_call)
+                        logger.info(f"Found tool call in natural language: {tool_name}")
+                except json.JSONDecodeError:
+                    # Try Python literal eval as fallback
+                    try:
+                        arguments = ast.literal_eval(args_str)
+                        if isinstance(arguments, dict):
+                            tool_call = {
+                                "id": f"call_{len(tool_calls)}",
+                                "type": "function",
+                                "function": {
+                                    "name": tool_name,
+                                    "arguments": arguments
+                                }
+                            }
+                            tool_calls.append(tool_call)
+                            logger.info(f"Found tool call in natural language (literal_eval): {tool_name}")
+                    except (ValueError, SyntaxError):
+                        continue
 
         return tool_calls if tool_calls else None
+
+    def _parse_tool_call_json(self, json_str: str, idx: int, valid_tool_names: set) -> Optional[Dict[str, Any]]:
+        """Parse a single tool call JSON string.
+
+        Args:
+            json_str: JSON string to parse
+            idx: Index for generating unique tool call ID
+            valid_tool_names: Set of valid tool names to validate against
+
+        Returns:
+            Tool call in OpenAI format, or None if parsing failed
+        """
+        # Try parsing as JSON first, then Python dict syntax
+        tool_call_json = None
+        try:
+            tool_call_json = json.loads(json_str)
+        except json.JSONDecodeError:
+            try:
+                # Granite sometimes uses Python dict syntax (single quotes)
+                tool_call_json = ast.literal_eval(json_str)
+            except (ValueError, SyntaxError) as e:
+                logger.debug(f"Failed to parse tool call '{json_str[:100]}...': {e}")
+                return None
+
+        if not isinstance(tool_call_json, dict):
+            logger.debug(f"Parsed value is not a dict: {type(tool_call_json)}")
+            return None
+
+        # Extract name and arguments, handling various formats
+        tool_name = tool_call_json.get("name")
+        arguments = tool_call_json.get("arguments", {})
+
+        # Validate we have a tool name
+        if not tool_name:
+            logger.debug(f"Tool call missing 'name' field: {tool_call_json}")
+            return None
+
+        # Validate this is actually a known tool
+        if tool_name not in valid_tool_names:
+            logger.debug(f"Tool '{tool_name}' not in valid tool names")
+            return None
+
+        # Ensure arguments is a dict
+        if not isinstance(arguments, dict):
+            logger.debug(f"Arguments is not a dict for tool '{tool_name}': {type(arguments)}")
+            arguments = {}
+
+        # Convert to OpenAI format
+        return {
+            "id": f"call_{idx}",
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "arguments": arguments
+            }
+        }
 
     def start_chat(
         self,
@@ -239,6 +321,11 @@ class GraniteClient:
 
                 result = response.json()
 
+                # Store usage metadata if available
+                if "usage" in result:
+                    self.last_usage_metadata = result["usage"]
+                    logger.debug(f"Usage metadata: {self.last_usage_metadata}")
+
                 # Extract the assistant's response
                 if not result.get("choices") or len(result["choices"]) == 0:
                     raise RuntimeError("No response from Granite API")
@@ -255,7 +342,12 @@ class GraniteClient:
 
                 # If no structured tool calls, check for text-based tool calls
                 if not tool_calls and content:
+                    logger.debug(f"Checking for text-based tool calls in content: {content[:200]}...")
                     tool_calls = self._parse_text_tool_calls(content)
+                    if tool_calls:
+                        logger.info(f"Found {len(tool_calls)} text-based tool calls")
+                    else:
+                        logger.debug("No text-based tool calls found")
 
                 # If no tool calls, we're done - return the final response
                 if not tool_calls:
@@ -268,13 +360,20 @@ class GraniteClient:
                 display_content = content
                 if content and not assistant_message.get("tool_calls"):
                     # Only clean if these were text-based tool calls (not structured)
-                    display_content = re.sub(r'<tool_call>.*?</tool_call>', '', content, flags=re.DOTALL).strip()
+                    # Remove tool call tags and clean up excessive whitespace
+                    display_content = re.sub(r'<tool_call>.*?</tool_call>', '', content, flags=re.DOTALL)
+                    # Clean up multiple consecutive newlines (more than 2)
+                    display_content = re.sub(r'\n{3,}', '\n\n', display_content)
+                    # Strip leading/trailing whitespace
+                    display_content = display_content.strip()
+
                     # Update the message in history to use clean content
                     self.messages[-1]["content"] = display_content
-                    logger.debug(f"Cleaned content after tool call extraction: {display_content}")
+                    logger.debug(f"Cleaned content after tool call extraction: {display_content[:200]}...")
 
                 # Display intermediate text content (before processing tool calls)
-                if display_content:
+                # Only display if there's meaningful content after cleaning
+                if display_content and len(display_content) > 10:
                     # Stop spinner before printing to avoid visual interference
                     from .spinner import get_global_spinner
                     spinner = get_global_spinner()
@@ -284,6 +383,9 @@ class GraniteClient:
                     console.print("\n[green]Assistant:[/green]")
                     console.print(Panel(Markdown(display_content), border_style="blue"))
                     console.print()
+                else:
+                    # If there's no meaningful text content, just log that we're executing tools
+                    logger.info(f"Executing {len(tool_calls)} tool call(s) without intermediate text")
 
                 # Restart spinner for tool execution
                 # The spinner will show while tools execute and while waiting for next LLM response
@@ -295,10 +397,13 @@ class GraniteClient:
                 # Execute tool calls
                 if not self.mcp_client:
                     logger.error("Tool calls requested but no MCP client available")
+                    logger.error(f"Tool calls that were skipped: {[tc.get('function', {}).get('name') for tc in tool_calls]}")
                     return assistant_message.get("content", "")
 
+                logger.info(f"Processing {len(tool_calls)} tool call(s)")
                 # Process each tool call
-                for tool_call in tool_calls:
+                for idx, tool_call in enumerate(tool_calls):
+                    logger.debug(f"Processing tool call {idx + 1}/{len(tool_calls)}")
                     function = tool_call.get("function", {})
                     function_name = function.get("name")
                     function_args = function.get("arguments", {})
@@ -472,3 +577,11 @@ class GraniteClient:
         """Clear the chat history and start a new session."""
         self.messages = []
         logger.debug("Cleared chat history")
+
+    def get_last_usage(self) -> Optional[Dict[str, int]]:
+        """Get usage metadata from the last response.
+
+        Returns:
+            Dictionary with token usage information, or None if not available
+        """
+        return self.last_usage_metadata if self.last_usage_metadata else None

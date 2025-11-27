@@ -103,6 +103,12 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Suppress non-error output",
     )
 
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        help="Path to log file for debug output (enables automatic DEBUG level logging to file)",
+    )
+
     # MCP arguments
     parser.add_argument(
         "--mcp-server",
@@ -259,6 +265,22 @@ def main() -> int:
         logging.getLogger().setLevel(logging.DEBUG)
     elif args.quiet:
         logging.getLogger().setLevel(logging.ERROR)
+
+    # Setup file logging if requested
+    if args.log_file:
+        # Remove the RichHandler so logs only go to the file
+        root_logger = logging.getLogger()
+        root_logger.handlers.clear()
+
+        file_handler = logging.FileHandler(args.log_file, mode='a')
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(file_formatter)
+        root_logger.addHandler(file_handler)
+        logger.info(f"Logging to file: {args.log_file}")
 
     try:
         # Load configuration

@@ -42,6 +42,7 @@ class GeminiClient:
         )
         self.chat_session = None
         self.mcp_client = None  # Will be set when tools are provided
+        self.last_usage_metadata = None  # Store usage metadata from last response
         logger.info(f"Initialized Gemini client with model: {config.gemini_model}")
 
     def _convert_mcp_tools_to_gemini_format(self, mcp_tools: List[Dict[str, Any]]) -> List[types.Tool]:
@@ -385,6 +386,11 @@ class GeminiClient:
             if iteration >= max_iterations:
                 logger.warning("Maximum function calling iterations reached")
 
+            # Store usage metadata if available
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                self.last_usage_metadata = response.usage_metadata
+                logger.debug(f"Usage metadata: {self.last_usage_metadata}")
+
             # Extract text from response, even if it contains function calls
             # This handles the case where we hit max iterations with pending function calls
             if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
@@ -440,3 +446,22 @@ class GeminiClient:
         """Clear the chat history and start a new session."""
         self.start_chat()
         logger.debug("Cleared chat history")
+
+    def get_last_usage(self) -> Optional[Dict[str, int]]:
+        """Get usage metadata from the last response.
+
+        Returns:
+            Dictionary with token usage information, or None if not available
+        """
+        if not self.last_usage_metadata:
+            return None
+
+        usage_dict = {}
+        if hasattr(self.last_usage_metadata, 'prompt_token_count'):
+            usage_dict['prompt_tokens'] = self.last_usage_metadata.prompt_token_count
+        if hasattr(self.last_usage_metadata, 'candidates_token_count'):
+            usage_dict['completion_tokens'] = self.last_usage_metadata.candidates_token_count
+        if hasattr(self.last_usage_metadata, 'total_token_count'):
+            usage_dict['total_tokens'] = self.last_usage_metadata.total_token_count
+
+        return usage_dict if usage_dict else None

@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import sys
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
@@ -138,6 +138,13 @@ Type your questions and press Enter to chat with the assistant.
 
             self.console.print("[green]Assistant:[/green]")
             self.console.print(Panel(Markdown(response), border_style="blue"))
+
+            # Display usage information if available
+            usage = self.llm_client.get_last_usage()
+            if usage:
+                usage_text = self._format_usage(usage)
+                self.console.print(f"[dim]{usage_text}[/dim]")
+
             self.console.print()
 
         except Exception as e:
@@ -267,6 +274,13 @@ Type your questions and press Enter to chat with the assistant.
             # Display response
             self.console.print("\n[green]Assistant:[/green]")
             self.console.print(Panel(Markdown(response), border_style="blue"))
+
+            # Display usage information if available
+            usage = self.llm_client.get_last_usage()
+            if usage:
+                usage_text = self._format_usage(usage)
+                self.console.print(f"[dim]{usage_text}[/dim]")
+
             self.console.print()
 
         except Exception as e:
@@ -280,3 +294,22 @@ Type your questions and press Enter to chat with the assistant.
         """Clear the conversation history."""
         self.llm_client.clear_history()
         self.console.print("[yellow]Conversation history cleared.[/yellow]")
+
+    def _format_usage(self, usage: Dict[str, int]) -> str:
+        """Format usage information for display.
+
+        Args:
+            usage: Dictionary with token usage information
+
+        Returns:
+            Formatted usage string
+        """
+        parts = []
+        if 'prompt_tokens' in usage:
+            parts.append(f"Prompt: {usage['prompt_tokens']:,} tokens")
+        if 'completion_tokens' in usage:
+            parts.append(f"Completion: {usage['completion_tokens']:,} tokens")
+        if 'total_tokens' in usage:
+            parts.append(f"Total: {usage['total_tokens']:,} tokens")
+
+        return " | ".join(parts) if parts else "Usage information unavailable"
