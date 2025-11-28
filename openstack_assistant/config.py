@@ -30,6 +30,7 @@ class Config:
     granite_url: Optional[str] = None
     granite_user_key: Optional[str] = None
     granite_temperature: float = 0.0
+    granite_max_tokens: Optional[int] = None
     mcp_server_url: Optional[str] = None
     mcp_server_command: Optional[str] = None
     workflow_file: Optional[Path] = None
@@ -61,6 +62,9 @@ class Config:
         granite_url = os.getenv("GRANITE_URL")
         granite_user_key = os.getenv("GRANITE_USER_KEY")
         granite_temperature = float(os.getenv("GRANITE_TEMPERATURE", "0.0"))
+        granite_max_tokens = None
+        if os.getenv("GRANITE_MAX_TOKENS"):
+            granite_max_tokens = int(os.getenv("GRANITE_MAX_TOKENS"))
 
         # Validate that at least one LLM provider is configured
         if not gemini_api_key and not (granite_url and granite_user_key):
@@ -122,6 +126,7 @@ class Config:
             granite_url=granite_url,
             granite_user_key=granite_user_key,
             granite_temperature=granite_temperature,
+            granite_max_tokens=granite_max_tokens,
             mcp_server_url=mcp_url,
             mcp_server_command=mcp_command,
             workflow_file=workflow_file,

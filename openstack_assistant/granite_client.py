@@ -302,6 +302,10 @@ class GraniteClient:
                     "temperature": self.config.granite_temperature
                 }
 
+                # Add max_tokens if configured
+                if self.config.granite_max_tokens:
+                    payload["max_tokens"] = self.config.granite_max_tokens
+
                 # Add tools if available
                 if self.tools:
                     payload["tools"] = self.tools
@@ -511,6 +515,10 @@ class GraniteClient:
                 "stream": True,
                 "temperature": self.config.granite_temperature
             }
+
+            # Add max_tokens if configured
+            if self.config.granite_max_tokens:
+                payload["max_tokens"] = self.config.granite_max_tokens
 
             # Add tools if available
             if self.tools:

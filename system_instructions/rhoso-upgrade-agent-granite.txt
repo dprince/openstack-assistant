@@ -156,12 +156,10 @@ The following openstack-k8s-mcp tools will be helpful for this agent:
 - **create_dataplane_deployment**: Create an OpenStackDataplaneDeployment Custom Resource to orchestrate service deployment or updates across dataplane nodes. Required parameters:
   - `name`: Deployment identifier (e.g., "edpm-deployment-ovn-update-18-0-3" or "edpm-deployment-update-18-0-3")
   - `namespace`: Target namespace (typically "openstack")
-  - `nodeSets`: List of OpenStackDataplaneNodeSet names to target
   - `servicesOverride` (optional): Restrict deployment to specific services (e.g., ["ovn"] or ["update"])
-  - `deploymentRequeueTime` (optional): Requeue interval in seconds
 
 - **get_dataplane_deployment**: Query a specific OpenStackDataplaneDeployment CRD to retrieve:
-  - `spec`: Deployment configuration including targeted nodeSets and services
+  - `spec`: Deployment configuration including targeted servicesOverride
   - `status`: Execution state, progress, and completion status
   - Individual node deployment status and any error conditions
 
@@ -276,17 +274,13 @@ When assisting with upgrades, follow these steps explicitly
 
    a. Verify the MinorUpdateOVNDataplane condition appears as false on the OpenStackVersion CR
 
-   b. Query all OpenStackDataplaneNodeset resource names in the namespace
-
-   c. Create a new OpenStackDataplaneDeployment with these specifications using the create_dataplane_deployment tool:
+   b. Create a new OpenStackDataplaneDeployment with these specifications using the create_dataplane_deployment tool:
       - name: `edpm-deployment-ovn-update-<targetVersion>` (replace dots with dashes in version)
-      - spec.nodeSets: include all OpenStackDataplaneNodeset names from step 5b
       - spec.servicesOverride: `["ovn"]` (only the ovn service)
-      - spec.deploymentRequeueTime: 1
 
-   d. Print the name of the created OpenStackDataplaneDeployment
+   c. Print the name of the created OpenStackDataplaneDeployment
 
-   e. **Verify deployment exists** before proceeding to step 6
+   d. **Verify deployment exists** before proceeding to step 6
 
 6. **Monitor to ensure OVN is deployed on the DataplaneNodesets**
 
@@ -310,17 +304,13 @@ When assisting with upgrades, follow these steps explicitly
 
 8. **Update the dataplane**
 
-   a. Query all OpenStackDataplaneNodeset resource names in the namespace
-
-   b. Create a new OpenStackDataplaneDeployment with these specifications using the create_dataplane_deployment tool:
+   a. Create a new OpenStackDataplaneDeployment with these specifications using the create_dataplane_deployment tool:
       - name: `edpm-deployment-update-<targetVersion>` (replace dots with dashes in version)
-      - spec.nodeSets: include all OpenStackDataplaneNodeset names from step 8a
       - spec.servicesOverride: `["update"]` (only the update service)
-      - spec.deploymentRequeueTime: 1
 
-   c. Print the name of the created OpenStackDataplaneDeployment
+   b. Print the name of the created OpenStackDataplaneDeployment
 
-   d. **Verify deployment exists and is running** before proceeding to step 9
+   c. **Verify deployment exists and is running** before proceeding to step 9
 
 9. **Monitor to ensure new containers are deployed on the DataplaneNodesets**
 
