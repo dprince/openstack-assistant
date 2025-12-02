@@ -20,8 +20,6 @@ class Config:
         granite_temperature: Temperature for Granite model (default: 0.0)
         granite_max_tokens: Maximum tokens in Granite response
         granite_context_window: Context window size in tokens (default: 8192)
-        granite_context_target_ratio: Target ratio of context window to use (default: 0.6)
-            This leaves headroom for model responses and prevents context overflow.
         mcp_server_url: URL of the MCP server
         mcp_server_command: Command to start the MCP server
         mcp_allowed_tools: List of allowed MCP tool names (None = all tools allowed)
@@ -38,7 +36,6 @@ class Config:
     granite_temperature: float = 0.0
     granite_max_tokens: Optional[int] = None
     granite_context_window: int = 16384
-    granite_context_target_ratio: float = 0.75
     mcp_server_url: Optional[str] = None
     mcp_server_command: Optional[str] = None
     mcp_allowed_tools: Optional[List[str]] = None
@@ -76,7 +73,6 @@ class Config:
         if os.getenv("GRANITE_MAX_TOKENS"):
             granite_max_tokens = int(os.getenv("GRANITE_MAX_TOKENS"))
         granite_context_window = int(os.getenv("GRANITE_CONTEXT_WINDOW", "16384"))
-        granite_context_target_ratio = float(os.getenv("GRANITE_CONTEXT_TARGET_RATIO", "0.75"))
 
         # Validate that at least one LLM provider is configured
         if not gemini_api_key and not (granite_url and granite_user_key):
@@ -153,7 +149,6 @@ class Config:
             granite_temperature=granite_temperature,
             granite_max_tokens=granite_max_tokens,
             granite_context_window=granite_context_window,
-            granite_context_target_ratio=granite_context_target_ratio,
             mcp_server_url=mcp_url,
             mcp_server_command=mcp_command,
             mcp_allowed_tools=mcp_allowed_tools,
