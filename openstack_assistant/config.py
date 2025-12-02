@@ -18,12 +18,18 @@ class Config:
         granite_url: Full URL for Granite API (including model routing if needed)
         granite_user_key: User key for Granite authentication
         granite_temperature: Temperature for Granite model (default: 0.0)
+        granite_max_tokens: Maximum tokens in Granite response
+        granite_context_window: Context window size in tokens (default: 8192)
+        granite_context_target_ratio: Target ratio of context window to use (default: 0.6)
+            This leaves headroom for model responses and prevents context overflow.
         mcp_server_url: URL of the MCP server
         mcp_server_command: Command to start the MCP server
+        mcp_allowed_tools: List of allowed MCP tool names (None = all tools allowed)
         workflow_file: Path to workflow definition file
         system_instruction_file: Path to system instruction file for chat mode
         namespace: Default Kubernetes namespace to use
         mcp_tool_confirm_prefixes: List of tool name prefixes that require user confirmation
+        raw_message_log_dir: Directory to log raw LLM messages for debugging (None = disabled)
     """
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.5-flash"
@@ -31,12 +37,16 @@ class Config:
     granite_user_key: Optional[str] = None
     granite_temperature: float = 0.0
     granite_max_tokens: Optional[int] = None
+    granite_context_window: int = 16384
+    granite_context_target_ratio: float = 0.75
     mcp_server_url: Optional[str] = None
     mcp_server_command: Optional[str] = None
+    mcp_allowed_tools: Optional[List[str]] = None
     workflow_file: Optional[Path] = None
     system_instruction_file: Optional[Path] = None
     namespace: Optional[str] = None
     mcp_tool_confirm_prefixes: List[str] = field(default_factory=lambda: ["create_", "watch_", "update_"])
+    raw_message_log_dir: Optional[Path] = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -65,6 +75,8 @@ class Config:
         granite_max_tokens = None
         if os.getenv("GRANITE_MAX_TOKENS"):
             granite_max_tokens = int(os.getenv("GRANITE_MAX_TOKENS"))
+        granite_context_window = int(os.getenv("GRANITE_CONTEXT_WINDOW", "16384"))
+        granite_context_target_ratio = float(os.getenv("GRANITE_CONTEXT_TARGET_RATIO", "0.75"))
 
         # Validate that at least one LLM provider is configured
         if not gemini_api_key and not (granite_url and granite_user_key):
@@ -78,6 +90,13 @@ class Config:
         # Load common configuration
         mcp_url = os.getenv("MCP_SERVER_URL")
         mcp_command = os.getenv("MCP_SERVER_COMMAND")
+
+        # Load MCP allowed tools
+        mcp_allowed_tools = None
+        allowed_tools_str = os.getenv("MCP_ALLOWED_TOOLS")
+        if allowed_tools_str:
+            # Parse comma-separated list
+            mcp_allowed_tools = [t.strip() for t in allowed_tools_str.split(",") if t.strip()]
 
         workflow_file = None
         workflow_path = os.getenv("WORKFLOW_FILE")
@@ -120,6 +139,12 @@ class Config:
             # Parse comma-separated list
             mcp_tool_confirm_prefixes = [p.strip() for p in prefixes_str.split(",") if p.strip()]
 
+        # Load raw message logging directory
+        raw_message_log_dir = None
+        log_dir_str = os.getenv("RAW_MESSAGE_LOG_DIR")
+        if log_dir_str:
+            raw_message_log_dir = Path(log_dir_str)
+
         return cls(
             gemini_api_key=gemini_api_key,
             gemini_model=gemini_model,
@@ -127,10 +152,14 @@ class Config:
             granite_user_key=granite_user_key,
             granite_temperature=granite_temperature,
             granite_max_tokens=granite_max_tokens,
+            granite_context_window=granite_context_window,
+            granite_context_target_ratio=granite_context_target_ratio,
             mcp_server_url=mcp_url,
             mcp_server_command=mcp_command,
+            mcp_allowed_tools=mcp_allowed_tools,
             workflow_file=workflow_file,
             system_instruction_file=system_instruction_file,
             namespace=namespace,
             mcp_tool_confirm_prefixes=mcp_tool_confirm_prefixes,
+            raw_message_log_dir=raw_message_log_dir,
         )

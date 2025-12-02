@@ -15,6 +15,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from .config import Config
+from .message_logger import MessageLogger
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -43,6 +44,7 @@ class GeminiClient:
         self.chat_session = None
         self.mcp_client = None  # Will be set when tools are provided
         self.last_usage_metadata = None  # Store usage metadata from last response
+        self.message_logger = MessageLogger(config.raw_message_log_dir)
         logger.info(f"Initialized Gemini client with model: {config.gemini_model}")
 
     def _convert_mcp_tools_to_gemini_format(self, mcp_tools: List[Dict[str, Any]]) -> List[types.Tool]:
@@ -183,7 +185,28 @@ class GeminiClient:
             self.start_chat()
 
         try:
+            # Log the request
+            self.message_logger.log_request(
+                {"message": message},
+                metadata={"model": self.config.gemini_model, "client": "gemini"}
+            )
+
             response = self.chat_session.send_message(message)
+
+            # Accumulate usage across all iterations for this conversation turn
+            accumulated_usage = {
+                'prompt_token_count': 0,
+                'candidates_token_count': 0,
+                'total_token_count': 0
+            }
+
+            # Add usage from initial response
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage = response.usage_metadata
+                accumulated_usage['prompt_token_count'] += getattr(usage, 'prompt_token_count', 0)
+                accumulated_usage['candidates_token_count'] += getattr(usage, 'candidates_token_count', 0)
+                accumulated_usage['total_token_count'] += getattr(usage, 'total_token_count', 0)
+                logger.debug(f"Initial response usage: prompt={accumulated_usage['prompt_token_count']}, completion={accumulated_usage['candidates_token_count']}, total={accumulated_usage['total_token_count']}")
 
             # Handle function calling loop
             max_iterations = 10  # Prevent infinite loops
@@ -304,6 +327,16 @@ class GeminiClient:
                         )
 
                         response = self.chat_session.send_message(function_response)
+
+                        # Accumulate usage from tool response
+                        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                            usage = response.usage_metadata
+                            accumulated_usage['prompt_token_count'] += getattr(usage, 'prompt_token_count', 0)
+                            accumulated_usage['candidates_token_count'] += getattr(usage, 'candidates_token_count', 0)
+                            accumulated_usage['total_token_count'] += getattr(usage, 'total_token_count', 0)
+                            logger.debug(f"Iteration {iteration} usage: prompt={getattr(usage, 'prompt_token_count', 0)}, completion={getattr(usage, 'candidates_token_count', 0)}")
+                            logger.debug(f"Accumulated so far: prompt={accumulated_usage['prompt_token_count']}, completion={accumulated_usage['candidates_token_count']}, total={accumulated_usage['total_token_count']}")
+
                         iteration += 1
 
                     except Exception as e:
@@ -316,6 +349,15 @@ class GeminiClient:
                             )
                         )
                         response = self.chat_session.send_message(error_response)
+
+                        # Accumulate usage from error response
+                        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                            usage = response.usage_metadata
+                            accumulated_usage['prompt_token_count'] += getattr(usage, 'prompt_token_count', 0)
+                            accumulated_usage['candidates_token_count'] += getattr(usage, 'candidates_token_count', 0)
+                            accumulated_usage['total_token_count'] += getattr(usage, 'total_token_count', 0)
+                            logger.debug(f"Error iteration {iteration} usage accumulated")
+
                         iteration += 1
 
                 # Process text-based tool calls
@@ -370,6 +412,13 @@ class GeminiClient:
 
                             response = self.chat_session.send_message(function_response)
 
+                            # Accumulate usage from text-based tool response
+                            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                                usage = response.usage_metadata
+                                accumulated_usage['prompt_token_count'] += getattr(usage, 'prompt_token_count', 0)
+                                accumulated_usage['candidates_token_count'] += getattr(usage, 'candidates_token_count', 0)
+                                accumulated_usage['total_token_count'] += getattr(usage, 'total_token_count', 0)
+
                         except Exception as e:
                             logger.error(f"Error executing MCP tool {tool_name}: {e}")
                             # Send error back to the model
@@ -381,27 +430,79 @@ class GeminiClient:
                             )
                             response = self.chat_session.send_message(error_response)
 
+                            # Accumulate usage from error response
+                            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                                usage = response.usage_metadata
+                                accumulated_usage['prompt_token_count'] += getattr(usage, 'prompt_token_count', 0)
+                                accumulated_usage['candidates_token_count'] += getattr(usage, 'candidates_token_count', 0)
+                                accumulated_usage['total_token_count'] += getattr(usage, 'total_token_count', 0)
+
                     iteration += 1
 
             if iteration >= max_iterations:
                 logger.warning("Maximum function calling iterations reached")
 
-            # Store usage metadata if available
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                self.last_usage_metadata = response.usage_metadata
-                logger.debug(f"Usage metadata: {self.last_usage_metadata}")
+            # Store accumulated usage metadata
+            # Convert the accumulated dict to a format similar to the SDK's usage_metadata object
+            class AccumulatedUsage:
+                def __init__(self, prompt_tokens, completion_tokens, total_tokens):
+                    self.prompt_token_count = prompt_tokens
+                    self.candidates_token_count = completion_tokens
+                    self.total_token_count = total_tokens
+
+            self.last_usage_metadata = AccumulatedUsage(
+                accumulated_usage['prompt_token_count'],
+                accumulated_usage['candidates_token_count'],
+                accumulated_usage['total_token_count']
+            )
+            logger.info(f"Final accumulated usage: prompt={accumulated_usage['prompt_token_count']}, completion={accumulated_usage['candidates_token_count']}, total={accumulated_usage['total_token_count']}")
 
             # Extract text from response, even if it contains function calls
             # This handles the case where we hit max iterations with pending function calls
+            response_text = ""
             if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 text_parts = []
                 for part in response.candidates[0].content.parts:
                     if hasattr(part, 'text') and part.text:
                         text_parts.append(part.text)
-                return ''.join(text_parts).strip()
+                response_text = ''.join(text_parts).strip()
+            else:
+                # Fallback to response.text (may trigger warning if function calls present)
+                response_text = response.text
 
-            # Fallback to response.text (may trigger warning if function calls present)
-            return response.text
+            # Log the final response
+            response_data = {
+                "text": response_text,
+                "candidates": []
+            }
+            # Try to capture the full response structure for debugging
+            if response.candidates:
+                for candidate in response.candidates:
+                    candidate_data = {}
+                    if candidate.content and candidate.content.parts:
+                        candidate_data["parts"] = []
+                        for part in candidate.content.parts:
+                            part_data = {}
+                            if hasattr(part, 'text') and part.text:
+                                part_data["text"] = part.text
+                            if hasattr(part, 'function_call') and part.function_call:
+                                part_data["function_call"] = {
+                                    "name": part.function_call.name,
+                                    "args": dict(part.function_call.args) if part.function_call.args else {}
+                                }
+                            candidate_data["parts"].append(part_data)
+                    response_data["candidates"].append(candidate_data)
+
+            self.message_logger.log_response(
+                response_data,
+                metadata={
+                    "model": self.config.gemini_model,
+                    "client": "gemini",
+                    "usage": accumulated_usage
+                }
+            )
+
+            return response_text
 
         except Exception as e:
             logger.error(f"Error sending message to Gemini: {e}")

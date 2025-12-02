@@ -22,13 +22,15 @@ class MCPClient:
         _notification_handler: Optional callback for handling server notifications
         _confirmation_handler: Optional callback for confirming tool execution
         _confirm_prefixes: List of tool name prefixes that require confirmation
+        _allowed_tools: Optional list of allowed tool names (None = all tools allowed)
     """
 
     def __init__(self,
                  server_command: Optional[str] = None,
                  notification_handler: Optional[Callable[[Dict[str, Any]], None]] = None,
                  confirmation_handler: Optional[Callable[[str, Dict[str, Any]], bool]] = None,
-                 confirm_prefixes: Optional[List[str]] = None):
+                 confirm_prefixes: Optional[List[str]] = None,
+                 allowed_tools: Optional[List[str]] = None):
         """Initialize the MCP client.
 
         Args:
@@ -38,6 +40,7 @@ class MCPClient:
             confirmation_handler: Optional callback function for confirming tool execution.
                                  The function receives (tool_name, arguments) and returns bool.
             confirm_prefixes: List of tool name prefixes that require confirmation (e.g., ["create_", "watch_"])
+            allowed_tools: Optional list of allowed tool names (None = all tools allowed)
         """
         self.server_command = server_command
         self.process: Optional[subprocess.Popen] = None
@@ -46,9 +49,12 @@ class MCPClient:
         self._notification_handler = notification_handler
         self._confirmation_handler = confirmation_handler
         self._confirm_prefixes = confirm_prefixes or []
+        self._allowed_tools = allowed_tools
         logger.info(f"Initialized MCP client with command: {server_command}")
         if self._confirm_prefixes:
             logger.info(f"Tool confirmation required for prefixes: {self._confirm_prefixes}")
+        if self._allowed_tools:
+            logger.info(f"Allowed tools filter: {self._allowed_tools}")
 
     async def connect(self) -> None:
         """Connect to the MCP server.
@@ -113,8 +119,19 @@ class MCPClient:
         response = await self._send_request(request)
 
         if "result" in response and "tools" in response["result"]:
-            self.tools = response["result"]["tools"]
-            logger.info(f"Found {len(self.tools)} tools from MCP server")
+            all_tools = response["result"]["tools"]
+
+            # Filter tools if allowed_tools list is specified
+            if self._allowed_tools:
+                self.tools = [tool for tool in all_tools if tool.get('name') in self._allowed_tools]
+                logger.info(f"Found {len(all_tools)} tools from MCP server, filtered to {len(self.tools)} allowed tools")
+                filtered_out = len(all_tools) - len(self.tools)
+                if filtered_out > 0:
+                    logger.info(f"Filtered out {filtered_out} tools not in allowed list")
+            else:
+                self.tools = all_tools
+                logger.info(f"Found {len(self.tools)} tools from MCP server")
+
             for tool in self.tools:
                 logger.debug(f"  - {tool.get('name')}: {tool.get('description')}")
 

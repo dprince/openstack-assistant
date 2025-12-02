@@ -229,7 +229,8 @@ async def run_chat_mode(
                 mcp_command,
                 notification_handler=notification_handler,
                 confirmation_handler=confirmation_handler,
-                confirm_prefixes=config.mcp_tool_confirm_prefixes
+                confirm_prefixes=config.mcp_tool_confirm_prefixes,
+                allowed_tools=config.mcp_allowed_tools
             )
             await mcp_client.connect()
             console.print("[green]Connected to MCP server[/green]\n")
