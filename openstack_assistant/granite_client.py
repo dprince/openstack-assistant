@@ -11,6 +11,7 @@ import requests
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from transformers import AutoTokenizer
 
 from .config import Config
 
@@ -41,11 +42,45 @@ class GraniteClient:
             "Authorization": f"Bearer {config.granite_user_key}",
             "Content-Type": "application/json"
         })
+
+        # Disable SSL verification for internal/development endpoints with self-signed certs
+        # This is needed for some internal Red Hat API endpoints
+        self.session.verify = False
+
+        # Suppress only the single InsecureRequestWarning from urllib3
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
         self.messages = []
         self.tools = None
         self.mcp_client = None
         self.last_usage_metadata = None  # Store usage metadata from last response
+
+        # Initialize tokenizer for chat template formatting
+        model_id = "ibm-granite/granite-4.0-h-tiny"
+        logger.info(f"Loading tokenizer for model: {model_id}")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+
         logger.info(f"Initialized Granite client with URL: {config.granite_url}")
+
+    def _format_messages_with_template(self, messages: List[Dict[str, Any]]) -> str:
+        """Format messages using the tokenizer's chat template.
+
+        Args:
+            messages: List of message dictionaries with role and content
+
+        Returns:
+            Formatted prompt string with proper role tags
+        """
+        # Apply the chat template using the tokenizer
+        # This automatically adds the correct <|start_of_role|> tags
+        formatted_prompt = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            available_tools=self.tools if self.tools else None
+        )
+        return formatted_prompt
 
     def _convert_mcp_tools_to_granite_format(self, mcp_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert MCP tool definitions to Granite tool format.
@@ -296,25 +331,28 @@ class GraniteClient:
             iteration = 0
 
             while iteration < max_iterations:
-                # Build the request payload
+                # Format messages using the chat template
+                formatted_prompt = self._format_messages_with_template(self.messages)
+                logger.debug(f"Formatted prompt (first 500 chars): {formatted_prompt[:500]}")
+
+                # Build the request payload for completions endpoint
                 payload = {
-                    "messages": self.messages.copy(),
-                    "temperature": self.config.granite_temperature
+                    "prompt": formatted_prompt,
+                    "temperature": self.config.granite_temperature,
+                    "min_p": self.config.granite_min_p
                 }
 
                 # Add max_tokens if configured
                 if self.config.granite_max_tokens:
                     payload["max_tokens"] = self.config.granite_max_tokens
 
-                # Add tools if available
-                if self.tools:
-                    payload["tools"] = self.tools
-
-                # Make API request
-                # Support full URLs (with /v1/chat/completions) or base URLs
+                # Make API request to completions endpoint
+                # Support full URLs (with /v1/completions) or base URLs
                 url = self.config.granite_url
-                if not url.endswith('/v1/chat/completions'):
-                    url = f"{url}/v1/chat/completions"
+                if '/v1/chat/completions' in url:
+                    url = url.replace('/v1/chat/completions', '/v1/completions')
+                elif not url.endswith('/v1/completions'):
+                    url = f"{url}/v1/completions"
 
                 response = self.session.post(
                     url,
@@ -330,50 +368,52 @@ class GraniteClient:
                     self.last_usage_metadata = result["usage"]
                     logger.debug(f"Usage metadata: {self.last_usage_metadata}")
 
-                # Extract the assistant's response
+                # Extract the assistant's response from completions endpoint
                 if not result.get("choices") or len(result["choices"]) == 0:
                     raise RuntimeError("No response from Granite API")
 
                 choice = result["choices"][0]
-                assistant_message = choice.get("message", {})
+                # For completions endpoint, response is in 'text' field
+                content = choice.get("text", "").strip()
+
+                # Create assistant message for history
+                assistant_message = {
+                    "role": "assistant",
+                    "content": content
+                }
 
                 # Add assistant message to history
                 self.messages.append(assistant_message)
 
-                # Check if there are tool calls (structured format)
-                tool_calls = assistant_message.get("tool_calls")
-                content = assistant_message.get("content", "")
-
-                # If no structured tool calls, check for text-based tool calls
-                if not tool_calls and content:
+                # Check for text-based tool calls in the content
+                if content:
                     logger.debug(f"Checking for text-based tool calls in content: {content[:200]}...")
                     tool_calls = self._parse_text_tool_calls(content)
                     if tool_calls:
                         logger.info(f"Found {len(tool_calls)} text-based tool calls")
                     else:
                         logger.debug("No text-based tool calls found")
+                else:
+                    tool_calls = None
 
                 # If no tool calls, we're done - return the final response
                 if not tool_calls:
                     # No tool calls, return the text response
                     # chat.py will display this final response
-                    return assistant_message.get("content", "")
+                    return content
 
                 # We have tool calls to process
                 # Prepare content for display (this is an intermediate message)
-                display_content = content
-                if content and not assistant_message.get("tool_calls"):
-                    # Only clean if these were text-based tool calls (not structured)
-                    # Remove tool call tags and clean up excessive whitespace
-                    display_content = re.sub(r'<tool_call>.*?</tool_call>', '', content, flags=re.DOTALL)
-                    # Clean up multiple consecutive newlines (more than 2)
-                    display_content = re.sub(r'\n{3,}', '\n\n', display_content)
-                    # Strip leading/trailing whitespace
-                    display_content = display_content.strip()
+                # Remove tool call tags and clean up excessive whitespace
+                display_content = re.sub(r'<tool_call>.*?</tool_call>', '', content, flags=re.DOTALL)
+                # Clean up multiple consecutive newlines (more than 2)
+                display_content = re.sub(r'\n{3,}', '\n\n', display_content)
+                # Strip leading/trailing whitespace
+                display_content = display_content.strip()
 
-                    # Update the message in history to use clean content
-                    self.messages[-1]["content"] = display_content
-                    logger.debug(f"Cleaned content after tool call extraction: {display_content[:200]}...")
+                # Update the message in history to use clean content
+                self.messages[-1]["content"] = display_content
+                logger.debug(f"Cleaned content after tool call extraction: {display_content[:200]}...")
 
                 # Display intermediate text content (before processing tool calls)
                 # Only display if there's meaningful content after cleaning
@@ -402,80 +442,86 @@ class GraniteClient:
                 if not self.mcp_client:
                     logger.error("Tool calls requested but no MCP client available")
                     logger.error(f"Tool calls that were skipped: {[tc.get('function', {}).get('name') for tc in tool_calls]}")
-                    return assistant_message.get("content", "")
+                    return content
 
-                logger.info(f"Processing {len(tool_calls)} tool call(s)")
-                # Process each tool call
-                for idx, tool_call in enumerate(tool_calls):
-                    logger.debug(f"Processing tool call {idx + 1}/{len(tool_calls)}")
-                    function = tool_call.get("function", {})
-                    function_name = function.get("name")
-                    function_args = function.get("arguments", {})
+                # Only process the FIRST tool call to ensure sequential execution
+                # The LLM will be called again after this tool completes, and can then
+                # decide on the next step based on the result
+                if len(tool_calls) > 1:
+                    logger.warning(f"Found {len(tool_calls)} tool calls, but only executing first one for sequential execution")
+                else:
+                    logger.info(f"Processing 1 tool call")
 
-                    # Handle both string and dict arguments
-                    if isinstance(function_args, str):
-                        try:
-                            function_args = json.loads(function_args)
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse function arguments: {e}")
-                            function_args = {}
-                    elif not isinstance(function_args, dict):
-                        logger.warning(f"Unexpected function arguments type: {type(function_args)}")
-                        function_args = {}
+                tool_call = tool_calls[0]
+                logger.debug(f"Processing tool call: {tool_call}")
+                function = tool_call.get("function", {})
+                function_name = function.get("name")
+                function_args = function.get("arguments", {})
 
+                # Handle both string and dict arguments
+                if isinstance(function_args, str):
                     try:
-                        logger.info(f"LLM wants to execute MCP tool: {function_name}")
-                        logger.debug(f"Tool arguments: {function_args}")
+                        function_args = json.loads(function_args)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse function arguments: {e}")
+                        function_args = {}
+                elif not isinstance(function_args, dict):
+                    logger.warning(f"Unexpected function arguments type: {type(function_args)}")
+                    function_args = {}
 
-                        # Execute the tool via MCP
-                        def run_async_in_thread(coro):
-                            """Run an async coroutine in a new thread with its own event loop."""
-                            import threading
-                            result_container = {}
-                            exception_container = {}
+                try:
+                    logger.info(f"LLM wants to execute MCP tool: {function_name}")
+                    logger.debug(f"Tool arguments: {function_args}")
 
-                            def run_in_new_loop():
+                    # Execute the tool via MCP
+                    def run_async_in_thread(coro):
+                        """Run an async coroutine in a new thread with its own event loop."""
+                        import threading
+                        result_container = {}
+                        exception_container = {}
+
+                        def run_in_new_loop():
+                            try:
+                                new_loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(new_loop)
                                 try:
-                                    new_loop = asyncio.new_event_loop()
-                                    asyncio.set_event_loop(new_loop)
-                                    try:
-                                        result_container['result'] = new_loop.run_until_complete(coro)
-                                    finally:
-                                        new_loop.close()
-                                except Exception as e:
-                                    exception_container['exception'] = e
+                                    result_container['result'] = new_loop.run_until_complete(coro)
+                                finally:
+                                    new_loop.close()
+                            except Exception as e:
+                                exception_container['exception'] = e
 
-                            thread = threading.Thread(target=run_in_new_loop)
-                            thread.start()
-                            thread.join()
+                        thread = threading.Thread(target=run_in_new_loop)
+                        thread.start()
+                        thread.join()
 
-                            if 'exception' in exception_container:
-                                raise exception_container['exception']
-                            return result_container['result']
+                        if 'exception' in exception_container:
+                            raise exception_container['exception']
+                        return result_container['result']
 
-                        result = run_async_in_thread(
-                            self.mcp_client.call_tool(function_name, function_args)
-                        )
+                    result = run_async_in_thread(
+                        self.mcp_client.call_tool(function_name, function_args)
+                    )
 
-                        logger.debug(f"Tool result: {result}")
+                    logger.debug(f"Tool result: {result}")
 
-                        # Add tool result to messages
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.get("id"),
-                            "name": function_name,
-                            "content": str(result)
-                        })
+                    # Add tool result to messages
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id"),
+                        "name": function_name,
+                        "content": str(result)
+                    })
 
-                    except Exception as e:
-                        logger.error(f"Error executing MCP tool {function_name}: {e}")
-                        # Add error message to conversation
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.get("id"),
-                            "name": function_name,
-                            "content": f"Error: {str(e)}"
-                        })
+                except Exception as e:
+                    logger.error(f"Error executing MCP tool {function_name}: {e}")
+                    # Add error message to conversation
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id"),
+                        "name": function_name,
+                        "content": f"Error: {str(e)}"
+                    })
 
                 iteration += 1
 
@@ -509,26 +555,29 @@ class GraniteClient:
         })
 
         try:
-            # Build the request payload
+            # Format messages using the chat template
+            formatted_prompt = self._format_messages_with_template(self.messages)
+            logger.debug(f"Formatted prompt for streaming (first 500 chars): {formatted_prompt[:500]}")
+
+            # Build the request payload for completions endpoint
             payload = {
-                "messages": self.messages.copy(),
+                "prompt": formatted_prompt,
                 "stream": True,
-                "temperature": self.config.granite_temperature
+                "temperature": self.config.granite_temperature,
+                "min_p": self.config.granite_min_p
             }
 
             # Add max_tokens if configured
             if self.config.granite_max_tokens:
                 payload["max_tokens"] = self.config.granite_max_tokens
 
-            # Add tools if available
-            if self.tools:
-                payload["tools"] = self.tools
-
-            # Make streaming API request
-            # Support full URLs (with /v1/chat/completions) or base URLs
+            # Make streaming API request to completions endpoint
+            # Support full URLs (with /v1/completions) or base URLs
             url = self.config.granite_url
-            if not url.endswith('/v1/chat/completions'):
-                url = f"{url}/v1/chat/completions"
+            if '/v1/chat/completions' in url:
+                url = url.replace('/v1/chat/completions', '/v1/completions')
+            elif not url.endswith('/v1/completions'):
+                url = f"{url}/v1/completions"
 
             response = self.session.post(
                 url,
@@ -551,8 +600,13 @@ class GraniteClient:
                             import json
                             chunk = json.loads(data)
                             if chunk.get("choices"):
-                                delta = chunk["choices"][0].get("delta", {})
-                                content = delta.get("content", "")
+                                choice = chunk["choices"][0]
+                                # For completions endpoint, streaming uses "text" field
+                                # For chat completions, it uses "delta" with "content"
+                                content = choice.get("text", "")
+                                if not content:
+                                    delta = choice.get("delta", {})
+                                    content = delta.get("content", "")
                                 if content:
                                     full_content += content
                                     yield content

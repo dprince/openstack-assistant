@@ -19,7 +19,7 @@ class Config:
         granite_user_key: User key for Granite authentication
         granite_temperature: Temperature for Granite model (default: 0.0)
         granite_max_tokens: Maximum tokens in Granite response
-        granite_context_window: Context window size in tokens (default: 8192)
+        granite_min_p: Minimum probability threshold for Granite sampling (default: 0.1)
         mcp_server_url: URL of the MCP server
         mcp_server_command: Command to start the MCP server
         mcp_allowed_tools: List of allowed MCP tool names (None = all tools allowed)
@@ -35,7 +35,7 @@ class Config:
     granite_user_key: Optional[str] = None
     granite_temperature: float = 0.0
     granite_max_tokens: Optional[int] = None
-    granite_context_window: int = 16384
+    granite_min_p: float = 0.1
     mcp_server_url: Optional[str] = None
     mcp_server_command: Optional[str] = None
     mcp_allowed_tools: Optional[List[str]] = None
@@ -72,7 +72,7 @@ class Config:
         granite_max_tokens = None
         if os.getenv("GRANITE_MAX_TOKENS"):
             granite_max_tokens = int(os.getenv("GRANITE_MAX_TOKENS"))
-        granite_context_window = int(os.getenv("GRANITE_CONTEXT_WINDOW", "16384"))
+        granite_min_p = float(os.getenv("GRANITE_MIN_P", "0.1"))
 
         # Validate that at least one LLM provider is configured
         if not gemini_api_key and not (granite_url and granite_user_key):
@@ -148,7 +148,7 @@ class Config:
             granite_user_key=granite_user_key,
             granite_temperature=granite_temperature,
             granite_max_tokens=granite_max_tokens,
-            granite_context_window=granite_context_window,
+            granite_min_p=granite_min_p,
             mcp_server_url=mcp_url,
             mcp_server_command=mcp_command,
             mcp_allowed_tools=mcp_allowed_tools,
