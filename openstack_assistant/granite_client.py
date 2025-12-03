@@ -14,6 +14,7 @@ from rich.panel import Panel
 from transformers import AutoTokenizer
 
 from .config import Config
+from .tools import get_openstack_tools
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -85,13 +86,20 @@ class GraniteClient:
     def _convert_mcp_tools_to_granite_format(self, mcp_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert MCP tool definitions to Granite tool format.
 
+        Combines hardcoded OpenStack tools (defined in OpenAPI format) with
+        any additional MCP tools provided.
+
         Args:
             mcp_tools: List of MCP tool definitions
 
         Returns:
             List of Granite-formatted tool definitions
         """
-        granite_tools = []
+        # Start with hardcoded OpenStack tools in OpenAPI format
+        granite_tools = get_openstack_tools()
+        logger.info(f"Loaded {len(granite_tools)} hardcoded OpenStack tools in OpenAPI format")
+
+        # Add any additional MCP tools
         for mcp_tool in mcp_tools:
             try:
                 # Convert to Granite tool format (similar to OpenAI function calling)
@@ -297,11 +305,17 @@ class GraniteClient:
         # Store MCP client for tool execution
         self.mcp_client = mcp_client
 
-        # Convert and store tools if provided
+        # Convert and store tools
+        # Always include hardcoded OpenStack tools, plus any additional MCP tools
         if tools:
             logger.info(f"Starting chat session with {len(tools)} MCP tools")
             self.tools = self._convert_mcp_tools_to_granite_format(tools)
-            logger.debug(f"Configured {len(self.tools)} tools for Granite")
+        else:
+            # Even without MCP tools, load hardcoded OpenStack tools
+            self.tools = get_openstack_tools()
+            logger.info(f"Loaded {len(self.tools)} hardcoded OpenStack tools (no additional MCP tools)")
+
+        logger.debug(f"Configured {len(self.tools)} total tools for Granite")
 
         logger.debug("Started new chat session")
 

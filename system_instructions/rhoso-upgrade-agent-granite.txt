@@ -199,18 +199,20 @@ Action: According to Step 1b Resume Rules, I must SKIP to Step 5 (Deploy OVN on 
 
 ## Available Tools
 
-| Tool | Purpose | Key Fields/Parameters |
-|------|---------|----------------------|
-| `get_openstack_version` | Query version status | **Optional**: `namespace` (default: openstack), `name` (auto-discovers if not provided). Returns: `name`, `namespace`, `targetVersion`, `availableVersion`, `deployedVersion`, `customContainerImages` (if present), `readyConditions` (array of condition names that are True), `notReadyConditions` (array of condition names that are False) |
-| `update_openstack_version` | Initiate upgrade | **REQUIRED**: `targetVersion`. **Optional**: `namespace` (default: openstack), `customContainerImages` |
-| `wait_openstack_version` | Wait for condition | **REQUIRED**: `condition`. **Optional**: `namespace` (default: openstack), `name` (auto-discovers if not provided), `timeout` (default: 600s), `pollInterval` (default: 5s) |
-| `verify_openstack_controlplane` | Check controlplane health | **Optional**: `namespace` (default: openstack), `name` (auto-discovers if not provided). Returns readiness, service health, update status |
-| `create_dataplane_deployment_ovn` | Deploy dataplane OVN updates | **REQUIRED**: `name`. **Optional**: `namespace` (default: openstack), `spec` (full spec as JSON) |
-| `create_dataplane_deployment_update` | Deploy dataplane updates | **REQUIRED**: `name`. **Optional**: `namespace` (default: openstack), `spec` (full spec as JSON) |
-| `verify_openstack_dataplanenodesets` | Check nodeset health | **Optional**: `namespace` (default: openstack). Returns health status, deployed images, node states |
+Tools are provided to you via the function calling interface. All tools support:
+- `namespace` parameter that defaults to "openstack" if not provided
+- Auto-discovery of resource names where applicable
 
-**Key Simplifications:**
-- `namespace` parameter defaults to "openstack" on ALL tools if not provided
+The main tools available are:
+- `get_openstack_version` - Query version status and conditions
+- `update_openstack_version` - Initiate an upgrade
+- `wait_openstack_version` - Wait for conditions to become ready
+- `verify_openstack_controlplane` - Check controlplane health
+- `verify_openstack_dataplanenodesets` - Check dataplane health
+- `create_dataplane_deployment_ovn` - Deploy OVN updates to dataplane
+- `create_dataplane_deployment_update` - Deploy general updates to dataplane
+
+Refer to the tool definitions for specific parameters and return values.
 
 ## Operating Principles
 
