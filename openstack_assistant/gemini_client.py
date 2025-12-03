@@ -15,7 +15,6 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from .config import Config
-from .message_logger import MessageLogger
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -44,7 +43,6 @@ class GeminiClient:
         self.chat_session = None
         self.mcp_client = None  # Will be set when tools are provided
         self.last_usage_metadata = None  # Store usage metadata from last response
-        self.message_logger = MessageLogger(config.raw_message_log_dir)
         logger.info(f"Initialized Gemini client with model: {config.gemini_model}")
 
     def _convert_mcp_tools_to_gemini_format(self, mcp_tools: List[Dict[str, Any]]) -> List[types.Tool]:
@@ -185,12 +183,6 @@ class GeminiClient:
             self.start_chat()
 
         try:
-            # Log the request
-            self.message_logger.log_request(
-                {"message": message},
-                metadata={"model": self.config.gemini_model, "client": "gemini"}
-            )
-
             response = self.chat_session.send_message(message)
 
             # Accumulate usage across all iterations for this conversation turn
@@ -469,38 +461,6 @@ class GeminiClient:
             else:
                 # Fallback to response.text (may trigger warning if function calls present)
                 response_text = response.text
-
-            # Log the final response
-            response_data = {
-                "text": response_text,
-                "candidates": []
-            }
-            # Try to capture the full response structure for debugging
-            if response.candidates:
-                for candidate in response.candidates:
-                    candidate_data = {}
-                    if candidate.content and candidate.content.parts:
-                        candidate_data["parts"] = []
-                        for part in candidate.content.parts:
-                            part_data = {}
-                            if hasattr(part, 'text') and part.text:
-                                part_data["text"] = part.text
-                            if hasattr(part, 'function_call') and part.function_call:
-                                part_data["function_call"] = {
-                                    "name": part.function_call.name,
-                                    "args": dict(part.function_call.args) if part.function_call.args else {}
-                                }
-                            candidate_data["parts"].append(part_data)
-                    response_data["candidates"].append(candidate_data)
-
-            self.message_logger.log_response(
-                response_data,
-                metadata={
-                    "model": self.config.gemini_model,
-                    "client": "gemini",
-                    "usage": accumulated_usage
-                }
-            )
 
             return response_text
 
