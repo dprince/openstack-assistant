@@ -5,13 +5,14 @@ import asyncio
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 import requests
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from transformers import AutoTokenizer
 
 from .config import Config
 from .tools import get_openstack_tools
@@ -57,15 +58,30 @@ class GraniteClient:
         self.mcp_client = None
         self.last_usage_metadata = None  # Store usage metadata from last response
 
-        # Initialize tokenizer for chat template formatting
-        model_id = "ibm-granite/granite-4.0-h-tiny"
-        logger.info(f"Loading tokenizer for model: {model_id}")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        # Load local chat template using ImmutableSandboxedEnvironment
+        # This matches how transformers handles chat templates
+        # trim_blocks and lstrip_blocks help with whitespace management in the template
+        template_path = Path(__file__).parent.parent / "chat_template" / "granite-4.0-h-tiny.txt"
+        logger.info(f"Loading chat template from: {template_path}")
+        with open(template_path, 'r') as f:
+            template_content = f.read()
+
+        # Create Jinja2 environment matching transformers' configuration
+        jinja_env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True)
+
+        # Override tojson filter to prevent HTML escaping
+        # This matches transformers' approach - see transformers/utils/chat_template_utils.py:449
+        def tojson_no_escape(x, ensure_ascii=False, indent=None, separators=None, sort_keys=False):
+            """Custom tojson filter that doesn't escape HTML characters."""
+            return json.dumps(x, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys)
+
+        jinja_env.filters["tojson"] = tojson_no_escape
+        self.chat_template = jinja_env.from_string(template_content)
 
         logger.info(f"Initialized Granite client with URL: {config.granite_url}")
 
     def _format_messages_with_template(self, messages: List[Dict[str, Any]]) -> str:
-        """Format messages using the tokenizer's chat template.
+        """Format messages using the local Jinja2 chat template.
 
         Args:
             messages: List of message dictionaries with role and content
@@ -73,11 +89,10 @@ class GraniteClient:
         Returns:
             Formatted prompt string with proper role tags
         """
-        # Apply the chat template using the tokenizer
+        # Apply the chat template using Jinja2
         # This automatically adds the correct <|start_of_role|> tags
-        formatted_prompt = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
+        formatted_prompt = self.chat_template.render(
+            messages=messages,
             add_generation_prompt=True,
             available_tools=self.tools if self.tools else None
         )
