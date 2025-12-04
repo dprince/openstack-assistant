@@ -4,16 +4,14 @@ import ast
 import asyncio
 import json
 import logging
-import os
 import re
-from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-from huggingface_hub import InferenceClient
-from jinja2 import Template
+import requests
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from transformers import AutoTokenizer
 
 from .config import Config
 from .tools import get_openstack_tools
@@ -23,12 +21,11 @@ console = Console()
 
 
 class GraniteClient:
-    """Client for interacting with Granite LLM API using HuggingFace InferenceClient.
+    """Client for interacting with Granite LLM API.
 
     Attributes:
         config: Configuration object
-        client: HuggingFace InferenceClient for API calls
-        chat_template: Local Jinja2 chat template for message formatting
+        session: Requests session for API calls
         messages: Conversation history (includes system instruction as first message if provided)
         tools: Available MCP tools
         mcp_client: MCP client for tool execution
@@ -41,40 +38,34 @@ class GraniteClient:
             config: Configuration object containing API URL and User Key
         """
         self.config = config
+        self.session = requests.Session()
+        self.session.headers.update({
+            "Authorization": f"Bearer {config.granite_user_key}",
+            "Content-Type": "application/json"
+        })
 
-        # Initialize InferenceClient with the API endpoint
-        # Remove /v1/completions or /v1/chat/completions suffix if present
-        base_url = config.granite_url
-        if '/v1/completions' in base_url:
-            base_url = base_url.split('/v1/completions')[0]
-        elif '/v1/chat/completions' in base_url:
-            base_url = base_url.split('/v1/chat/completions')[0]
+        # Disable SSL verification for internal/development endpoints with self-signed certs
+        # This is needed for some internal Red Hat API endpoints
+        self.session.verify = False
 
-        self.client = InferenceClient(
-            base_url=base_url,
-            token=config.granite_user_key
-        )
+        # Suppress only the single InsecureRequestWarning from urllib3
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
         self.messages = []
         self.tools = None
         self.mcp_client = None
         self.last_usage_metadata = None  # Store usage metadata from last response
 
-        # Load local chat template
-        template_path = Path(__file__).parent.parent / "chat_template" / "granite-4.0-h-tiny.txt"
-        logger.info(f"Loading chat template from: {template_path}")
+        # Initialize tokenizer for chat template formatting
+        model_id = "ibm-granite/granite-4.0-h-tiny"
+        logger.info(f"Loading tokenizer for model: {model_id}")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-        if not template_path.exists():
-            raise FileNotFoundError(f"Chat template not found at {template_path}")
-
-        with open(template_path, 'r') as f:
-            self.chat_template = f.read()
-
-        logger.info(f"Loaded chat template ({len(self.chat_template)} chars)")
-        logger.info(f"Initialized Granite client with base URL: {base_url}")
+        logger.info(f"Initialized Granite client with URL: {config.granite_url}")
 
     def _format_messages_with_template(self, messages: List[Dict[str, Any]]) -> str:
-        """Format messages using the local chat template.
+        """Format messages using the tokenizer's chat template.
 
         Args:
             messages: List of message dictionaries with role and content
@@ -82,20 +73,14 @@ class GraniteClient:
         Returns:
             Formatted prompt string with proper role tags
         """
-        # Use Jinja2 to render the chat template
-        template = Template(self.chat_template)
-
-        # Prepare context for the template
-        context = {
-            "messages": messages,
-            "add_generation_prompt": True,
-        }
-
-        # Add tools if available
-        if self.tools:
-            context["available_tools"] = self.tools
-
-        formatted_prompt = template.render(**context)
+        # Apply the chat template using the tokenizer
+        # This automatically adds the correct <|start_of_role|> tags
+        formatted_prompt = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            available_tools=self.tools if self.tools else None
+        )
         return formatted_prompt
 
     def _convert_mcp_tools_to_granite_format(self, mcp_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -364,30 +349,46 @@ class GraniteClient:
                 formatted_prompt = self._format_messages_with_template(self.messages)
                 logger.debug(f"Formatted prompt (first 500 chars): {formatted_prompt[:500]}")
 
-                # Use InferenceClient for text generation
-                response = self.client.text_generation(
-                    prompt=formatted_prompt,
-                    temperature=self.config.granite_temperature,
-                    max_new_tokens=self.config.granite_max_tokens,
-                    details=True,  # Get detailed response with usage info
-                )
+                # Build the request payload for completions endpoint
+                payload = {
+                    "prompt": formatted_prompt,
+                    "temperature": self.config.granite_temperature,
+                    "min_p": self.config.granite_min_p
+                }
 
-                # Extract the generated text
-                # InferenceClient returns a TextGenerationResponse object when details=True
-                if hasattr(response, 'generated_text'):
-                    content = response.generated_text.strip()
-                else:
-                    content = str(response).strip()
+                # Add max_tokens if configured
+                if self.config.granite_max_tokens:
+                    payload["max_tokens"] = self.config.granite_max_tokens
+
+                # Make API request to completions endpoint
+                # Support full URLs (with /v1/completions) or base URLs
+                url = self.config.granite_url
+                if '/v1/chat/completions' in url:
+                    url = url.replace('/v1/chat/completions', '/v1/completions')
+                elif not url.endswith('/v1/completions'):
+                    url = f"{url}/v1/completions"
+
+                response = self.session.post(
+                    url,
+                    json=payload,
+                    timeout=60
+                )
+                response.raise_for_status()
+
+                result = response.json()
 
                 # Store usage metadata if available
-                if hasattr(response, 'details') and response.details:
-                    self.last_usage_metadata = {
-                        "prompt_tokens": getattr(response.details, 'input_tokens', None),
-                        "completion_tokens": getattr(response.details, 'generated_tokens', None),
-                        "total_tokens": getattr(response.details, 'input_tokens', 0) +
-                                      getattr(response.details, 'generated_tokens', 0)
-                    }
+                if "usage" in result:
+                    self.last_usage_metadata = result["usage"]
                     logger.debug(f"Usage metadata: {self.last_usage_metadata}")
+
+                # Extract the assistant's response from completions endpoint
+                if not result.get("choices") or len(result["choices"]) == 0:
+                    raise RuntimeError("No response from Granite API")
+
+                choice = result["choices"][0]
+                # For completions endpoint, response is in 'text' field
+                content = choice.get("text", "").strip()
 
                 # Create assistant message for history
                 assistant_message = {
@@ -542,9 +543,12 @@ class GraniteClient:
                 logger.warning("Maximum function calling iterations reached")
                 return self.messages[-1].get("content", "")
 
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             logger.error(f"Error sending message to Granite: {e}")
             raise RuntimeError(f"Granite API request failed: {e}")
+        except Exception as e:
+            logger.error(f"Error sending message to Granite: {e}")
+            raise
 
     def send_message_stream(self, message: str) -> Iterator[str]:
         """Send a message and stream the response.
@@ -569,17 +573,59 @@ class GraniteClient:
             formatted_prompt = self._format_messages_with_template(self.messages)
             logger.debug(f"Formatted prompt for streaming (first 500 chars): {formatted_prompt[:500]}")
 
-            # Use InferenceClient for streaming text generation
-            full_content = ""
-            for token in self.client.text_generation(
-                prompt=formatted_prompt,
-                temperature=self.config.granite_temperature,
-                max_new_tokens=self.config.granite_max_tokens,
+            # Build the request payload for completions endpoint
+            payload = {
+                "prompt": formatted_prompt,
+                "stream": True,
+                "temperature": self.config.granite_temperature,
+                "min_p": self.config.granite_min_p
+            }
+
+            # Add max_tokens if configured
+            if self.config.granite_max_tokens:
+                payload["max_tokens"] = self.config.granite_max_tokens
+
+            # Make streaming API request to completions endpoint
+            # Support full URLs (with /v1/completions) or base URLs
+            url = self.config.granite_url
+            if '/v1/chat/completions' in url:
+                url = url.replace('/v1/chat/completions', '/v1/completions')
+            elif not url.endswith('/v1/completions'):
+                url = f"{url}/v1/completions"
+
+            response = self.session.post(
+                url,
+                json=payload,
                 stream=True,
-            ):
-                if token:
-                    full_content += token
-                    yield token
+                timeout=60
+            )
+            response.raise_for_status()
+
+            full_content = ""
+            for line in response.iter_lines():
+                if line:
+                    line = line.decode('utf-8')
+                    if line.startswith("data: "):
+                        data = line[6:]
+                        if data.strip() == "[DONE]":
+                            break
+
+                        try:
+                            import json
+                            chunk = json.loads(data)
+                            if chunk.get("choices"):
+                                choice = chunk["choices"][0]
+                                # For completions endpoint, streaming uses "text" field
+                                # For chat completions, it uses "delta" with "content"
+                                content = choice.get("text", "")
+                                if not content:
+                                    delta = choice.get("delta", {})
+                                    content = delta.get("content", "")
+                                if content:
+                                    full_content += content
+                                    yield content
+                        except json.JSONDecodeError:
+                            continue
 
             # Add complete assistant message to history
             if full_content:
@@ -588,9 +634,12 @@ class GraniteClient:
                     "content": full_content
                 })
 
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             logger.error(f"Error streaming message from Granite: {e}")
             raise RuntimeError(f"Granite streaming request failed: {e}")
+        except Exception as e:
+            logger.error(f"Error streaming message from Granite: {e}")
+            raise
 
     def get_history(self) -> List:
         """Get the current chat history.
