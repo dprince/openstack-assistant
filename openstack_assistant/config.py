@@ -27,7 +27,6 @@ class Config:
         system_instruction_file: Path to system instruction file for chat mode
         namespace: Default Kubernetes namespace to use
         mcp_tool_confirm_prefixes: List of tool name prefixes that require user confirmation
-        raw_message_log_dir: Directory to log raw LLM messages for debugging (None = disabled)
     """
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.5-flash"
@@ -43,7 +42,6 @@ class Config:
     system_instruction_file: Optional[Path] = None
     namespace: Optional[str] = None
     mcp_tool_confirm_prefixes: List[str] = field(default_factory=lambda: ["create_", "watch_", "update_"])
-    raw_message_log_dir: Optional[Path] = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -135,12 +133,6 @@ class Config:
             # Parse comma-separated list
             mcp_tool_confirm_prefixes = [p.strip() for p in prefixes_str.split(",") if p.strip()]
 
-        # Load raw message logging directory
-        raw_message_log_dir = None
-        log_dir_str = os.getenv("RAW_MESSAGE_LOG_DIR")
-        if log_dir_str:
-            raw_message_log_dir = Path(log_dir_str)
-
         return cls(
             gemini_api_key=gemini_api_key,
             gemini_model=gemini_model,
@@ -156,5 +148,4 @@ class Config:
             system_instruction_file=system_instruction_file,
             namespace=namespace,
             mcp_tool_confirm_prefixes=mcp_tool_confirm_prefixes,
-            raw_message_log_dir=raw_message_log_dir,
         )
