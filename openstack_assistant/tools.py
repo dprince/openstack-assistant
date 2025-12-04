@@ -211,5 +211,32 @@ def get_openstack_tools() -> List[Dict[str, Any]]:
                     "required": []
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_resume_step",
+                "description": (
+                    "Determine which upgrade step to resume from based on current OpenStack version state. "
+                    "This tool analyzes targetVersion, availableVersion, and notReadyConditions to calculate "
+                    "the exact step number where the upgrade should continue. Use this immediately after "
+                    "get_openstack_version if an upgrade is already in progress (targetVersion == availableVersion). "
+                    "Returns a step number (2-10) and explanation of why that step was chosen."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "namespace": {
+                            "type": "string",
+                            "description": "Kubernetes namespace (default: 'openstack')"
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Name of OpenStackVersion resource (auto-discovers if not provided)"
+                        }
+                    },
+                    "required": []
+                }
+            }
         }
     ]
